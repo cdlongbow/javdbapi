@@ -1,11 +1,11 @@
 module github.com/RPbro/javdbapi
 
-go 1.26.2
+go 1.26.5
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/stretchr/testify v1.11.1
-	github.com/urfave/cli/v3 v3.8.0
+	github.com/urfave/cli/v3 v3.10.1
 )
 
 require (
