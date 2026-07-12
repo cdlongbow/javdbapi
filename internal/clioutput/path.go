@@ -2,32 +2,20 @@ package clioutput
 
 import (
 	"fmt"
-	"net/url"
-	pathpkg "path"
-	"strings"
+	"path/filepath"
+	"regexp"
 )
 
-func PathKeyFromVideoPath(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", fmt.Errorf("missing video path")
-	}
+// idPattern mirrors the SDK's own resource-ID validation (alnum only), so a
+// caller-supplied ID can never escape outputDir via "/" or "..".
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
 
-	if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
-		trimmed = parsed.Path
+// FilePath returns the cache file path for a validated video ID within
+// outputDir. The cache file name is the ID itself, per the v2 design: no
+// path-derived key is needed since the CLI now takes --id directly.
+func FilePath(outputDir, id string) (string, error) {
+	if !idPattern.MatchString(id) {
+		return "", fmt.Errorf("invalid video id %q", id)
 	}
-
-	if !strings.HasPrefix(trimmed, "/v/") {
-		return "", fmt.Errorf("invalid video path %q", raw)
-	}
-
-	key := strings.TrimSpace(pathpkg.Base(trimmed))
-	if key == "" || key == "." || key == "/" {
-		return "", fmt.Errorf("invalid video path %q", raw)
-	}
-	if strings.ContainsRune(key, '/') {
-		return "", fmt.Errorf("invalid video path %q", raw)
-	}
-
-	return key, nil
+	return filepath.Join(outputDir, id+".json"), nil
 }

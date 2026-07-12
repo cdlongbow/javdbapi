@@ -13,12 +13,4 @@
 vendor/
 dist/
 
-.claude/
-.codex/
-.superpowers/
-docs/
-AGENT.md
-CLAUDE.md
-GEMINI.md
-
 output/

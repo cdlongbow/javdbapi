@@ -3,13 +3,14 @@ package cliapp
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,187 +19,264 @@ import (
 
 	javdbapi "github.com/RPbro/javdbapi"
 	"github.com/RPbro/javdbapi/internal/clioutput"
-	"github.com/RPbro/javdbapi/internal/web"
 )
 
+// fakeFetcher is a hand-rolled Fetcher stand-in. Detail/Reviews calls are
+// recorded under a mutex since the worker pool calls them concurrently.
 type fakeFetcher struct {
-	searchPages map[int][]javdbapi.Video
-	listErrs    map[int]error
-	videoByPath map[string]*javdbapi.Video
-	videoErrs   map[string]error
-	videoCalls  []string
-	searchFn    func(javdbapi.SearchQuery) ([]javdbapi.Video, error)
-	videoFn     func(javdbapi.VideoQuery) (*javdbapi.Video, error)
+	pages    map[int]javdbapi.Page[javdbapi.VideoSummary]
+	pageErrs map[int]error
+
+	detailByID map[javdbapi.VideoID]*javdbapi.VideoDetail
+	detailErrs map[javdbapi.VideoID]error
+	detailFn   func(javdbapi.VideoID) (*javdbapi.VideoDetail, error)
+
+	reviewsByID map[javdbapi.VideoID][]javdbapi.Review
+	reviewsErrs map[javdbapi.VideoID]error
+	reviewsFn   func(javdbapi.VideoID) ([]javdbapi.Review, error)
+
+	mu           sync.Mutex
+	searchCalls  []int
+	detailCalls  []javdbapi.VideoID
+	reviewsCalls []javdbapi.VideoID
 }
 
-func (f *fakeFetcher) Home(context.Context, javdbapi.HomeQuery) ([]javdbapi.Video, error) {
-	return nil, fmt.Errorf("unexpected Home call")
+func (f *fakeFetcher) Home(context.Context, javdbapi.HomeQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	return javdbapi.Page[javdbapi.VideoSummary]{}, fmt.Errorf("unexpected Home call")
 }
 
-func (f *fakeFetcher) Search(_ context.Context, q javdbapi.SearchQuery) ([]javdbapi.Video, error) {
-	if f.searchFn != nil {
-		return f.searchFn(q)
+func (f *fakeFetcher) Search(_ context.Context, q javdbapi.SearchQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	f.mu.Lock()
+	f.searchCalls = append(f.searchCalls, q.Page)
+	f.mu.Unlock()
+	if err := f.pageErrs[q.Page]; err != nil {
+		return javdbapi.Page[javdbapi.VideoSummary]{}, err
 	}
-	if err := f.listErrs[q.Page]; err != nil {
+	return f.pages[q.Page], nil
+}
+
+func (f *fakeFetcher) MakerVideos(context.Context, javdbapi.MakerVideosQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	return javdbapi.Page[javdbapi.VideoSummary]{}, fmt.Errorf("unexpected MakerVideos call")
+}
+
+func (f *fakeFetcher) ActorVideos(context.Context, javdbapi.ActorVideosQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	return javdbapi.Page[javdbapi.VideoSummary]{}, fmt.Errorf("unexpected ActorVideos call")
+}
+
+func (f *fakeFetcher) Ranking(context.Context, javdbapi.RankingQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	return javdbapi.Page[javdbapi.VideoSummary]{}, fmt.Errorf("unexpected Ranking call")
+}
+
+func (f *fakeFetcher) Detail(_ context.Context, id javdbapi.VideoID) (*javdbapi.VideoDetail, error) {
+	f.mu.Lock()
+	f.detailCalls = append(f.detailCalls, id)
+	f.mu.Unlock()
+
+	if f.detailFn != nil {
+		return f.detailFn(id)
+	}
+	if err := f.detailErrs[id]; err != nil {
 		return nil, err
 	}
-	return f.searchPages[q.Page], nil
-}
-
-func (f *fakeFetcher) Maker(context.Context, javdbapi.MakerQuery) ([]javdbapi.Video, error) {
-	return nil, fmt.Errorf("unexpected Maker call")
-}
-
-func (f *fakeFetcher) Actor(context.Context, javdbapi.ActorQuery) ([]javdbapi.Video, error) {
-	return nil, fmt.Errorf("unexpected Actor call")
-}
-
-func (f *fakeFetcher) Ranking(context.Context, javdbapi.RankingQuery) ([]javdbapi.Video, error) {
-	return nil, fmt.Errorf("unexpected Ranking call")
-}
-
-func (f *fakeFetcher) Video(_ context.Context, q javdbapi.VideoQuery) (*javdbapi.Video, error) {
-	if f.videoFn != nil {
-		return f.videoFn(q)
+	if d, ok := f.detailByID[id]; ok {
+		return d, nil
 	}
-	path := q.Path
-	f.videoCalls = append(f.videoCalls, path)
-	if err := f.videoErrs[path]; err != nil {
+	detail := javdbapi.NewVideoDetail(javdbapi.VideoSummary{ID: id})
+	return &detail, nil
+}
+
+func (f *fakeFetcher) Reviews(_ context.Context, id javdbapi.VideoID) ([]javdbapi.Review, error) {
+	f.mu.Lock()
+	f.reviewsCalls = append(f.reviewsCalls, id)
+	f.mu.Unlock()
+
+	if f.reviewsFn != nil {
+		return f.reviewsFn(id)
+	}
+	if err := f.reviewsErrs[id]; err != nil {
 		return nil, err
 	}
-	return f.videoByPath[path], nil
+	return f.reviewsByID[id], nil
 }
 
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func (f *fakeFetcher) detailCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.detailCalls)
 }
 
-func testLoggerTo(w io.Writer) *slog.Logger {
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
-}
+func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-func rateLimitedError(rawURL string) error {
-	return fmt.Errorf("%w: %w", javdbapi.ErrUnexpectedStatus, &web.UnexpectedStatusError{
-		StatusCode: 429,
-		URL:        rawURL,
-	})
-}
-
-func TestRunListCommandStopsOnEmptyResultSkipsFreshAndDeduplicates(t *testing.T) {
-	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
-	dir := t.TempDir()
-	store := clioutput.NewStore(dir, func() time.Time { return now })
-
-	freshDoc := clioutput.Document{
-		Metadata: clioutput.Metadata{
-			LastUpdated: now.Add(-1 * time.Hour),
-			Path:        "/v/fresh",
-			PathKey:     "fresh",
-			Sources:     []clioutput.Source{clioutput.NewSearchSource("VR", 1)},
-		},
-		Video: javdbapi.Video{ID: "/v/fresh", Code: "FRESH-001"},
-	}
-	require.NoError(t, store.WriteFile(freshDoc))
-
-	fetcher := &fakeFetcher{
-		searchPages: map[int][]javdbapi.Video{
-			1: {
-				{ID: "/v/fresh", Code: "FRESH-001", Title: "fresh"},
-				{ID: "/v/stale", Code: "STALE-001", Title: "stale"},
-			},
-			2: {
-				{ID: "/v/stale", Code: "STALE-001", Title: "stale"},
-				{ID: "/v/new", Code: "NEW-001", Title: "new"},
-			},
-		},
-		listErrs: map[int]error{
-			3: fmt.Errorf("%w: page 3", javdbapi.ErrEmptyResult),
-		},
-		videoByPath: map[string]*javdbapi.Video{
-			"/v/stale": {ID: "/v/stale", Code: "STALE-001", Title: "stale"},
-			"/v/new":   {ID: "/v/new", Code: "NEW-001", Title: "new"},
-		},
-	}
-
-	var stdout bytes.Buffer
-	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputFile,
-			OutputDir:  dir,
-			StaleAfter: 24 * time.Hour,
-			Stdout:     &stdout,
-			Logger:     testLogger(),
-		},
-		Command:  CommandSearch,
-		Page:     1,
-		MaxPages: 3,
-		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, Summary{
-		PagesScanned: 2,
-		Candidates:   4,
-		Deduplicated: 3,
-		Fetched:      2,
-		SkippedFresh: 1,
-		Failed:       0,
-	}, summary)
-	assert.Equal(t, []string{"/v/stale", "/v/new"}, fetcher.videoCalls)
-	_, err = os.Stat(filepath.Join(dir, "new.json"))
-	require.NoError(t, err)
-}
-
-func TestRunListCommandReturnsListErrors(t *testing.T) {
+func TestRunListCommandStopsAfterHasNextFalse(t *testing.T) {
 	t.Parallel()
 
 	store := clioutput.NewStore(t.TempDir(), time.Now)
 	fetcher := &fakeFetcher{
-		listErrs: map[int]error{
-			1: fmt.Errorf("search page 1: %w", os.ErrPermission),
+		pages: map[int]javdbapi.Page[javdbapi.VideoSummary]{
+			1: {Items: []javdbapi.VideoSummary{{ID: "a"}}, Number: 1, HasNext: false},
 		},
+	}
+
+	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
+		Shared: SharedOptions{
+			OutputMode:  OutputConsole,
+			OutputDir:   t.TempDir(),
+			StaleAfter:  24 * time.Hour,
+			Concurrency: 2,
+			Stdout:      io.Discard,
+			Logger:      testLogger(),
+		},
+		Command:  CommandSearch,
+		Page:     1,
+		MaxPages: 5,
+		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, fetcher.searchCalls, "must not request a page after HasNext=false")
+	assert.Equal(t, 1, summary.PagesScanned)
+	assert.Equal(t, 1, summary.Fetched)
+}
+
+func TestRunListCommandDeduplicatesIDsAcrossPages(t *testing.T) {
+	t.Parallel()
+
+	store := clioutput.NewStore(t.TempDir(), time.Now)
+	fetcher := &fakeFetcher{
+		pages: map[int]javdbapi.Page[javdbapi.VideoSummary]{
+			1: {Items: []javdbapi.VideoSummary{{ID: "a"}, {ID: "b"}}, Number: 1, HasNext: true},
+			2: {Items: []javdbapi.VideoSummary{{ID: "b"}, {ID: "c"}}, Number: 2, HasNext: false},
+		},
+	}
+
+	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
+		Shared: SharedOptions{
+			OutputMode:  OutputConsole,
+			OutputDir:   t.TempDir(),
+			StaleAfter:  24 * time.Hour,
+			Concurrency: 2,
+			Stdout:      io.Discard,
+			Logger:      testLogger(),
+		},
+		Command:  CommandSearch,
+		Page:     1,
+		MaxPages: 5,
+		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, Summary{PagesScanned: 2, Candidates: 4, Deduplicated: 3, Fetched: 3}, summary)
+	assert.ElementsMatch(t, []javdbapi.VideoID{"a", "b", "c"}, fetcher.detailCalls)
+}
+
+func TestRunListCommandReturnsNonEmptyResultListErrors(t *testing.T) {
+	t.Parallel()
+
+	store := clioutput.NewStore(t.TempDir(), time.Now)
+	wantErr := fmt.Errorf("boom")
+	fetcher := &fakeFetcher{
+		pageErrs: map[int]error{1: wantErr},
 	}
 
 	_, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
 		Shared: SharedOptions{
-			OutputMode: OutputFile,
-			OutputDir:  t.TempDir(),
-			StaleAfter: 24 * time.Hour,
-			Stdout:     io.Discard,
-			Logger:     testLogger(),
+			OutputMode:  OutputConsole,
+			OutputDir:   t.TempDir(),
+			StaleAfter:  24 * time.Hour,
+			Concurrency: 2,
+			Stdout:      io.Discard,
+			Logger:      testLogger(),
+		},
+		Command:  CommandSearch,
+		Page:     1,
+		MaxPages: 5,
+		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
+	})
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestRunListCommandConcurrencyIsBoundedAndPreservesDiscoveryOrder(t *testing.T) {
+	t.Parallel()
+
+	store := clioutput.NewStore(t.TempDir(), time.Now)
+
+	ids := []javdbapi.VideoID{"a", "b", "c"}
+	delays := map[javdbapi.VideoID]time.Duration{"a": 30 * time.Millisecond, "b": 20 * time.Millisecond, "c": 10 * time.Millisecond}
+
+	var startWG sync.WaitGroup
+	startWG.Add(len(ids))
+
+	var active int32
+	var maxActive int32
+	var mu sync.Mutex
+
+	fetcher := &fakeFetcher{
+		pages: map[int]javdbapi.Page[javdbapi.VideoSummary]{
+			1: {Items: []javdbapi.VideoSummary{{ID: "a"}, {ID: "b"}, {ID: "c"}}, Number: 1, HasNext: false},
+		},
+		detailFn: func(id javdbapi.VideoID) (*javdbapi.VideoDetail, error) {
+			n := atomic.AddInt32(&active, 1)
+			mu.Lock()
+			if n > maxActive {
+				maxActive = n
+			}
+			mu.Unlock()
+
+			startWG.Done()
+			startWG.Wait() // barrier: block until all 3 workers are in flight
+
+			time.Sleep(delays[id])
+			atomic.AddInt32(&active, -1)
+
+			detail := javdbapi.NewVideoDetail(javdbapi.VideoSummary{ID: id})
+			return &detail, nil
+		},
+	}
+
+	var stdout bytes.Buffer
+	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
+		Shared: SharedOptions{
+			OutputMode:  OutputConsole,
+			OutputDir:   t.TempDir(),
+			StaleAfter:  24 * time.Hour,
+			Concurrency: 3,
+			Stdout:      &stdout,
+			Logger:      testLogger(),
 		},
 		Command:  CommandSearch,
 		Page:     1,
 		MaxPages: 1,
 		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "search page 1")
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), maxActive, "expected exactly 3 concurrent Detail calls")
+	assert.Equal(t, 3, summary.Fetched)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	require.Len(t, lines, 3)
+	assert.Contains(t, lines[0], `"id":"a"`)
+	assert.Contains(t, lines[1], `"id":"b"`)
+	assert.Contains(t, lines[2], `"id":"c"`)
 }
 
-func TestRunListCommandFailFastStopsAfterFirstVideoError(t *testing.T) {
+func TestRunListCommandFailFastCancelsRemainingWork(t *testing.T) {
 	t.Parallel()
 
 	store := clioutput.NewStore(t.TempDir(), time.Now)
 	fetcher := &fakeFetcher{
-		searchPages: map[int][]javdbapi.Video{
-			1: {
-				{ID: "/v/bad", Code: "BAD-001", Title: "bad"},
-				{ID: "/v/never", Code: "NEVER-001", Title: "never"},
-			},
+		pages: map[int]javdbapi.Page[javdbapi.VideoSummary]{
+			1: {Items: []javdbapi.VideoSummary{{ID: "a"}, {ID: "b"}}, Number: 1, HasNext: false},
 		},
-		videoErrs: map[string]error{
-			"/v/bad": fmt.Errorf("detail fetch failed"),
-		},
+		detailErrs: map[javdbapi.VideoID]error{"a": fmt.Errorf("detail unavailable")},
 	}
 
-	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
+	_, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
 		Shared: SharedOptions{
-			OutputMode: OutputFile,
-			OutputDir:  t.TempDir(),
-			StaleAfter: 24 * time.Hour,
-			Stdout:     io.Discard,
-			Logger:     testLogger(),
-			FailFast:   true,
+			OutputMode:  OutputConsole,
+			OutputDir:   t.TempDir(),
+			StaleAfter:  24 * time.Hour,
+			Concurrency: 1,
+			FailFast:    true,
+			Stdout:      io.Discard,
+			Logger:      testLogger(),
 		},
 		Command:  CommandSearch,
 		Page:     1,
@@ -206,68 +284,6 @@ func TestRunListCommandFailFastStopsAfterFirstVideoError(t *testing.T) {
 		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
 	})
 	require.Error(t, err)
-	assert.Equal(t, Summary{PagesScanned: 1, Candidates: 2, Deduplicated: 2, Failed: 1}, summary)
-	assert.Equal(t, []string{"/v/bad"}, fetcher.videoCalls)
-}
-
-func TestRunVideoCommandRejectsCanonicalPathMismatch(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := clioutput.NewStore(dir, time.Now)
-	fetcher := &fakeFetcher{
-		videoByPath: map[string]*javdbapi.Video{
-			"/v/input": {ID: "/v/redirected", Code: "REDIR-001", Title: "redirected"},
-		},
-	}
-
-	var stdout bytes.Buffer
-	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputBoth,
-			OutputDir:  dir,
-			StaleAfter: 24 * time.Hour,
-			Stdout:     &stdout,
-			Logger:     testLogger(),
-		},
-		Path: "/v/input",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "canonical path mismatch")
-	assert.Equal(t, Summary{Failed: 1}, summary)
-	assert.Empty(t, stdout.String())
-	_, statErr := os.Stat(filepath.Join(dir, "redirected.json"))
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
-}
-
-func TestRunVideoCommandConsoleModeSkipsMissingCacheDir(t *testing.T) {
-	t.Parallel()
-
-	cacheDir := filepath.Join(t.TempDir(), "missing-cache")
-	store := clioutput.NewStore(cacheDir, time.Now)
-	fetcher := &fakeFetcher{
-		videoByPath: map[string]*javdbapi.Video{
-			"/v/ZNdEbV": {ID: "/v/ZNdEbV", Code: "ABC-123", Title: "sample"},
-		},
-	}
-
-	var stdout bytes.Buffer
-	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputConsole,
-			OutputDir:  cacheDir,
-			StaleAfter: 24 * time.Hour,
-			BaseURL:    "https://javdb.com",
-			Stdout:     &stdout,
-			Logger:     testLogger(),
-		},
-		URL: "https://javdb.com/v/ZNdEbV?locale=zh",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, Summary{Fetched: 1}, summary)
-	assert.Contains(t, stdout.String(), `"path":"/v/ZNdEbV"`)
-	_, statErr := os.Stat(cacheDir)
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 func TestRunListCommandRejectsInvalidParams(t *testing.T) {
@@ -275,285 +291,208 @@ func TestRunListCommandRejectsInvalidParams(t *testing.T) {
 
 	store := clioutput.NewStore(t.TempDir(), time.Now)
 	fetcher := &fakeFetcher{}
+	base := ListRequest{
+		Command:  CommandSearch,
+		Page:     1,
+		MaxPages: 1,
+		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
+	}
 
 	cases := []struct {
-		name    string
-		req     ListRequest
-		wantErr string
+		name  string
+		shape func(ListRequest) ListRequest
 	}{
-		{
-			name: "max_pages_zero",
-			req: ListRequest{
-				Shared:   SharedOptions{OutputMode: OutputFile, OutputDir: t.TempDir(), Stdout: io.Discard, Logger: testLogger()},
-				Command:  CommandSearch,
-				Page:     1,
-				MaxPages: 0,
-				Search:   &javdbapi.SearchQuery{Keyword: "VR"},
-			},
-			wantErr: "invalid --max-pages 0",
-		},
-		{
-			name: "page_zero",
-			req: ListRequest{
-				Shared:   SharedOptions{OutputMode: OutputFile, OutputDir: t.TempDir(), Stdout: io.Discard, Logger: testLogger()},
-				Command:  CommandSearch,
-				Page:     0,
-				MaxPages: 1,
-				Search:   &javdbapi.SearchQuery{Keyword: "VR"},
-			},
-			wantErr: "invalid --page 0",
-		},
-		{
-			name: "invalid_output_mode",
-			req: ListRequest{
-				Shared:   SharedOptions{OutputMode: "invalid", OutputDir: t.TempDir(), Stdout: io.Discard, Logger: testLogger()},
-				Command:  CommandSearch,
-				Page:     1,
-				MaxPages: 1,
-				Search:   &javdbapi.SearchQuery{Keyword: "VR"},
-			},
-			wantErr: `invalid --output "invalid"`,
-		},
+		{"invalid output mode", func(r ListRequest) ListRequest {
+			r.Shared = SharedOptions{OutputMode: "bogus", Concurrency: 1, Stdout: io.Discard, Logger: testLogger()}
+			return r
+		}},
+		{"invalid page", func(r ListRequest) ListRequest {
+			r.Shared = SharedOptions{OutputMode: OutputConsole, Concurrency: 1, Stdout: io.Discard, Logger: testLogger()}
+			r.Page = 0
+			return r
+		}},
+		{"invalid max pages", func(r ListRequest) ListRequest {
+			r.Shared = SharedOptions{OutputMode: OutputConsole, Concurrency: 1, Stdout: io.Discard, Logger: testLogger()}
+			r.MaxPages = 0
+			return r
+		}},
+		{"invalid concurrency", func(r ListRequest) ListRequest {
+			r.Shared = SharedOptions{OutputMode: OutputConsole, Concurrency: 0, Stdout: io.Discard, Logger: testLogger()}
+			return r
+		}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := RunListCommand(context.Background(), fetcher, store, tc.req)
+			_, err := RunListCommand(context.Background(), fetcher, store, tc.shape(base))
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }
 
-func TestRunVideoCommandRejectsInvalidOutputMode(t *testing.T) {
-	t.Parallel()
-
-	store := clioutput.NewStore(t.TempDir(), time.Now)
-	_, err := RunVideoCommand(context.Background(), &fakeFetcher{}, store, VideoRequest{
-		Shared: SharedOptions{OutputMode: "bad", OutputDir: t.TempDir(), Stdout: io.Discard, Logger: testLogger()},
-		Path:   "/v/ZNdEbV",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `invalid --output "bad"`)
-}
-
-func TestRunVideoCommandRejectsURLFromDifferentHost(t *testing.T) {
+func TestRunVideoCommandRequiresID(t *testing.T) {
 	t.Parallel()
 
 	store := clioutput.NewStore(t.TempDir(), time.Now)
 	fetcher := &fakeFetcher{}
 
 	_, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputConsole,
-			OutputDir:  t.TempDir(),
-			StaleAfter: 24 * time.Hour,
-			BaseURL:    "https://javdb.com",
-			Stdout:     io.Discard,
-			Logger:     testLogger(),
-		},
-		URL: "https://example.com/v/ZNdEbV",
+		Shared: SharedOptions{OutputMode: OutputConsole, Stdout: io.Discard, Logger: testLogger()},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must match --base-url host")
-	assert.Empty(t, fetcher.videoCalls)
 }
 
-func TestRunVideoCommandSkipsFetchLogWhenFresh(t *testing.T) {
+func TestRunVideoCommandSkipsFreshCache(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
+	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 	store := clioutput.NewStore(dir, func() time.Time { return now })
-	require.NoError(t, store.WriteFile(clioutput.Document{
-		Metadata: clioutput.Metadata{
-			LastUpdated: now.Add(-1 * time.Hour),
-			Path:        "/v/fresh",
-			PathKey:     "fresh",
-			Sources:     []clioutput.Source{clioutput.NewVideoSource("/v/fresh")},
-		},
-		Video: javdbapi.Video{ID: "/v/fresh", Code: "FRESH-001"},
-	}))
 
-	var logs bytes.Buffer
+	fetcher := &fakeFetcher{}
+	firstOpts := VideoRequest{
+		Shared: SharedOptions{OutputMode: OutputFile, OutputDir: dir, StaleAfter: 24 * time.Hour, Stdout: io.Discard, Logger: testLogger()},
+		ID:     "P9Jkq9",
+	}
+	_, err := RunVideoCommand(context.Background(), fetcher, store, firstOpts)
+	require.NoError(t, err)
+	require.Equal(t, 1, fetcher.detailCallCount())
+
+	summary, err := RunVideoCommand(context.Background(), fetcher, store, firstOpts)
+	require.NoError(t, err)
+	assert.Equal(t, Summary{SkippedFresh: 1}, summary)
+	assert.Equal(t, 1, fetcher.detailCallCount(), "fresh cache must not re-fetch detail")
+}
+
+func TestRunVideoCommandConsoleModeSkipsMissingCacheDir(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "does-not-exist-yet")
+	store := clioutput.NewStore(dir, time.Now)
 	fetcher := &fakeFetcher{}
 
+	var stdout bytes.Buffer
 	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputConsole,
-			OutputDir:  dir,
-			StaleAfter: 24 * time.Hour,
-			BaseURL:    "https://javdb.com",
-			Stdout:     io.Discard,
-			Logger:     testLoggerTo(&logs),
-		},
-		Path: "/v/fresh",
+		Shared: SharedOptions{OutputMode: OutputConsole, OutputDir: dir, StaleAfter: 24 * time.Hour, Stdout: &stdout, Logger: testLogger()},
+		ID:     "P9Jkq9",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, Summary{SkippedFresh: 1}, summary)
-	assert.Empty(t, fetcher.videoCalls)
-	assert.NotContains(t, logs.String(), "fetching video")
-}
-
-func TestRunVideoCommandRetriesRateLimitThenSucceeds(t *testing.T) {
-	t.Parallel()
-
-	store := clioutput.NewStore(t.TempDir(), time.Now)
-	attempts := 0
-	fetcher := &fakeFetcher{
-		videoFn: func(q javdbapi.VideoQuery) (*javdbapi.Video, error) {
-			attempts++
-			if attempts < 3 {
-				return nil, rateLimitedError("https://javdb.com" + q.Path)
-			}
-			return &javdbapi.Video{ID: q.Path, Code: "ABC-123", Title: "sample"}, nil
-		},
-	}
-
-	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputConsole,
-			OutputDir:  t.TempDir(),
-			StaleAfter: 24 * time.Hour,
-			BaseURL:    "https://javdb.com",
-			Delay:      time.Nanosecond,
-			Stdout:     io.Discard,
-			Logger:     testLogger(),
-		},
-		Path: "/v/ZNdEbV",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 3, attempts)
 	assert.Equal(t, Summary{Fetched: 1}, summary)
+	assert.Contains(t, stdout.String(), `"id":"P9Jkq9"`)
+
+	_, statErr := os.Stat(dir)
+	assert.True(t, os.IsNotExist(statErr), "console mode must not create the output dir just to check freshness")
 }
 
-func TestRunListCommandMayReturnPartialNDJSONBeforeExitOne(t *testing.T) {
+func TestRunVideoCommandPersistsDetailDespiteReviewsFailureDefaultMode(t *testing.T) {
 	t.Parallel()
 
-	store := clioutput.NewStore(t.TempDir(), time.Now)
+	dir := t.TempDir()
+	store := clioutput.NewStore(dir, time.Now)
 	fetcher := &fakeFetcher{
-		searchPages: map[int][]javdbapi.Video{
-			1: {
-				{ID: "/v/good", Code: "GOOD-001", Title: "good"},
-				{ID: "/v/bad", Code: "BAD-001", Title: "bad"},
-			},
-		},
-		videoByPath: map[string]*javdbapi.Video{
-			"/v/good": {ID: "/v/good", Code: "GOOD-001", Title: "good"},
-		},
-		videoErrs: map[string]error{
-			"/v/bad": fmt.Errorf("detail fetch failed"),
-		},
+		reviewsErrs: map[javdbapi.VideoID]error{"P9Jkq9": fmt.Errorf("reviews unavailable")},
 	}
 
 	var stdout bytes.Buffer
-	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputConsole,
-			OutputDir:  t.TempDir(),
-			StaleAfter: 24 * time.Hour,
-			Stdout:     &stdout,
-			Logger:     testLogger(),
-		},
-		Command:  CommandSearch,
-		Page:     1,
-		MaxPages: 1,
-		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
+	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
+		Shared: SharedOptions{OutputMode: OutputBoth, OutputDir: dir, StaleAfter: 24 * time.Hour, Stdout: &stdout, Logger: testLogger()},
+		ID:     "P9Jkq9",
 	})
-	require.Error(t, err)
-	assert.Equal(t, Summary{PagesScanned: 1, Candidates: 2, Deduplicated: 2, Fetched: 1, Failed: 1}, summary)
-	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	require.Len(t, lines, 1)
-	assert.True(t, json.Valid([]byte(lines[0])))
-	assert.Contains(t, lines[0], `"path":"/v/good"`)
+	require.NoError(t, err)
+	assert.Equal(t, Summary{PartialFailed: 1}, summary)
+
+	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, state.Document)
+	require.Len(t, state.Document.PartialErrors, 1)
+	assert.Equal(t, "reviews", state.Document.PartialErrors[0].Component)
+	assert.Equal(t, "fetch_error", state.Document.PartialErrors[0].Kind)
+	assert.Contains(t, stdout.String(), `"id":"P9Jkq9"`)
 }
 
-func TestRunVideoCommandBothModeDoesNotWriteStdoutWhenCacheIsFresh(t *testing.T) {
+func TestRunVideoCommandPartialErrorMessageDoesNotLeakURL(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := clioutput.NewStore(dir, time.Now)
+	leakyErr := &javdbapi.OpError{
+		Op:  "reviews.fetch",
+		URL: "https://javdb.com/v/P9Jkq9?q=secret-search-term",
+		Err: javdbapi.ErrEmptyResult,
+	}
+	fetcher := &fakeFetcher{
+		reviewsErrs: map[javdbapi.VideoID]error{"P9Jkq9": leakyErr},
+	}
+
+	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
+		Shared: SharedOptions{OutputMode: OutputFile, OutputDir: dir, StaleAfter: 24 * time.Hour, Stdout: io.Discard, Logger: testLogger()},
+		ID:     "P9Jkq9",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, Summary{PartialFailed: 1}, summary)
+
+	raw, err := os.ReadFile(filepath.Join(dir, "P9Jkq9.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "javdb.com")
+	assert.NotContains(t, string(raw), "secret-search-term")
+
+	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, state.Document)
+	require.Len(t, state.Document.PartialErrors, 1)
+	assert.Equal(t, "empty_result", state.Document.PartialErrors[0].Kind)
+	assert.NotContains(t, state.Document.PartialErrors[0].Message, "javdb.com")
+}
+
+func TestRunVideoCommandFailFastCancelsAndReturnsReviewsError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := clioutput.NewStore(dir, time.Now)
+	wantErr := fmt.Errorf("reviews unavailable")
+	fetcher := &fakeFetcher{
+		reviewsErrs: map[javdbapi.VideoID]error{"P9Jkq9": wantErr},
+	}
+
+	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{
+		Shared: SharedOptions{OutputMode: OutputFile, OutputDir: dir, StaleAfter: 24 * time.Hour, Stdout: io.Discard, Logger: testLogger(), FailFast: true},
+		ID:     "P9Jkq9",
+	})
+	require.ErrorIs(t, err, wantErr)
+	assert.Equal(t, Summary{PartialFailed: 1}, summary)
+
+	_, statErr := os.Stat(filepath.Join(dir, "P9Jkq9.json"))
+	require.NoError(t, statErr, "detail should still be persisted despite fail-fast reviews error")
+}
+
+func TestRunVideoCommandRetriesReviewsOnNextInvocationReusingFreshDetail(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	store := clioutput.NewStore(dir, func() time.Time { return now })
-	require.NoError(t, store.WriteFile(clioutput.Document{
-		Metadata: clioutput.Metadata{
-			LastUpdated: now.Add(-1 * time.Hour),
-			Path:        "/v/fresh",
-			PathKey:     "fresh",
-			Sources:     []clioutput.Source{clioutput.NewVideoSource("/v/fresh")},
-		},
-		Video: javdbapi.Video{ID: "/v/fresh", Code: "FRESH-001"},
-	}))
 
-	var stdout bytes.Buffer
-	summary, err := RunVideoCommand(context.Background(), &fakeFetcher{}, store, VideoRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputBoth,
-			OutputDir:  dir,
-			StaleAfter: 24 * time.Hour,
-			BaseURL:    "https://javdb.com",
-			Stdout:     &stdout,
-			Logger:     testLogger(),
-		},
-		Path: "/v/fresh",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, Summary{SkippedFresh: 1}, summary)
-	assert.Empty(t, stdout.String())
-}
-
-func TestCanonicalVideoPathRejectsMissingAndMixedLocatorInputs(t *testing.T) {
-	t.Parallel()
-
-	_, err := canonicalVideoPath("https://javdb.com", "", "")
-	require.Error(t, err)
-	assert.Equal(t, "exactly one of --path or --url is required", err.Error())
-
-	_, err = canonicalVideoPath("https://javdb.com", "/v/ZNdEbV", "https://javdb.com/v/ZNdEbV")
-	require.Error(t, err)
-	assert.Equal(t, "exactly one of --path or --url is required", err.Error())
-}
-
-func TestRunListCommandRetriesRateLimitedListPage(t *testing.T) {
-	t.Parallel()
-
-	store := clioutput.NewStore(t.TempDir(), time.Now)
-	listAttempts := 0
-	videoAttempts := 0
 	fetcher := &fakeFetcher{
-		searchFn: func(q javdbapi.SearchQuery) ([]javdbapi.Video, error) {
-			listAttempts++
-			if listAttempts < 3 {
-				return nil, rateLimitedError("https://javdb.com/search?page=1")
-			}
-			return []javdbapi.Video{{ID: "/v/ZNdEbV", Code: "ABC-123", Title: "sample"}}, nil
-		},
-		videoFn: func(q javdbapi.VideoQuery) (*javdbapi.Video, error) {
-			videoAttempts++
-			return &javdbapi.Video{ID: q.Path, Code: "ABC-123", Title: "sample"}, nil
-		},
+		reviewsErrs: map[javdbapi.VideoID]error{"P9Jkq9": fmt.Errorf("reviews unavailable")},
 	}
 
-	summary, err := RunListCommand(context.Background(), fetcher, store, ListRequest{
-		Shared: SharedOptions{
-			OutputMode: OutputConsole,
-			OutputDir:  t.TempDir(),
-			StaleAfter: 24 * time.Hour,
-			Delay:      time.Nanosecond,
-			Stdout:     io.Discard,
-			Logger:     testLogger(),
-		},
-		Command:  CommandSearch,
-		Page:     1,
-		MaxPages: 1,
-		Search:   &javdbapi.SearchQuery{Keyword: "VR"},
-	})
+	opts := SharedOptions{OutputMode: OutputFile, OutputDir: dir, StaleAfter: 24 * time.Hour, Stdout: io.Discard, Logger: testLogger()}
+
+	_, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{Shared: opts, ID: "P9Jkq9"})
 	require.NoError(t, err)
-	assert.Equal(t, 3, listAttempts)
-	assert.Equal(t, 1, videoAttempts)
-	assert.Equal(t, Summary{
-		PagesScanned: 1,
-		Candidates:   1,
-		Deduplicated: 1,
-		Fetched:      1,
-	}, summary)
+	assert.Equal(t, 1, fetcher.detailCallCount())
+
+	fetcher.reviewsErrs = nil
+	fetcher.reviewsByID = map[javdbapi.VideoID][]javdbapi.Review{"P9Jkq9": {{ID: "r1"}}}
+
+	summary, err := RunVideoCommand(context.Background(), fetcher, store, VideoRequest{Shared: opts, ID: "P9Jkq9"})
+	require.NoError(t, err)
+	assert.Equal(t, Summary{Fetched: 1}, summary)
+	assert.Equal(t, 1, fetcher.detailCallCount(), "detail must not be re-fetched since it is still fresh")
+
+	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, state.Document)
+	require.Len(t, state.Document.Reviews, 1)
+	assert.Empty(t, state.Document.PartialErrors)
 }

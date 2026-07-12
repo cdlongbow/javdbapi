@@ -197,3 +197,28 @@ func parseOutputMode(raw string) (cliapp.OutputMode, error) {
 func newStringFlag(name string, spec enumSpec, required bool) *cli.StringFlag {
 	return &cli.StringFlag{Name: name, Usage: spec.usage(), Required: required}
 }
+
+const (
+	minConcurrency = 1
+	maxConcurrency = 16
+)
+
+func parseConcurrency(raw int) (int, error) {
+	if raw < minConcurrency || raw > maxConcurrency {
+		return 0, fmt.Errorf("--concurrency must be between %d and %d", minConcurrency, maxConcurrency)
+	}
+	return raw, nil
+}
+
+func parseCommaValues(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}

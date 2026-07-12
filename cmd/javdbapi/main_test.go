@@ -4,40 +4,83 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
+	"strconv"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	cli "github.com/urfave/cli/v3"
 
 	javdbapi "github.com/RPbro/javdbapi"
 	"github.com/RPbro/javdbapi/internal/cliapp"
 )
 
-type fakeExecutor struct {
-	listReq      cliapp.ListRequest
-	videoReq     cliapp.VideoRequest
-	listSummary  cliapp.Summary
-	videoSummary cliapp.Summary
-	listErr      error
-	videoErr     error
+type fakeFetcher struct {
+	homeCalls    []javdbapi.HomeQuery
+	searchCalls  []javdbapi.SearchQuery
+	makerCalls   []javdbapi.MakerVideosQuery
+	actorCalls   []javdbapi.ActorVideosQuery
+	rankingCalls []javdbapi.RankingQuery
+	detailCalls  []javdbapi.VideoID
+	reviewCalls  []javdbapi.VideoID
+
+	page    javdbapi.Page[javdbapi.VideoSummary]
+	pageErr error
+
+	detail    *javdbapi.VideoDetail
+	detailErr error
+	reviews   []javdbapi.Review
+	reviewErr error
 }
 
-func (f *fakeExecutor) RunList(_ context.Context, req cliapp.ListRequest) (cliapp.Summary, error) {
-	f.listReq = req
-	return f.listSummary, f.listErr
+func (f *fakeFetcher) Home(_ context.Context, q javdbapi.HomeQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	f.homeCalls = append(f.homeCalls, q)
+	return f.page, f.pageErr
 }
 
-func (f *fakeExecutor) RunVideo(_ context.Context, req cliapp.VideoRequest) (cliapp.Summary, error) {
-	f.videoReq = req
-	return f.videoSummary, f.videoErr
+func (f *fakeFetcher) Search(_ context.Context, q javdbapi.SearchQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	f.searchCalls = append(f.searchCalls, q)
+	return f.page, f.pageErr
+}
+
+func (f *fakeFetcher) MakerVideos(_ context.Context, q javdbapi.MakerVideosQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	f.makerCalls = append(f.makerCalls, q)
+	return f.page, f.pageErr
+}
+
+func (f *fakeFetcher) ActorVideos(_ context.Context, q javdbapi.ActorVideosQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	f.actorCalls = append(f.actorCalls, q)
+	return f.page, f.pageErr
+}
+
+func (f *fakeFetcher) Ranking(_ context.Context, q javdbapi.RankingQuery) (javdbapi.Page[javdbapi.VideoSummary], error) {
+	f.rankingCalls = append(f.rankingCalls, q)
+	return f.page, f.pageErr
+}
+
+func (f *fakeFetcher) Detail(_ context.Context, id javdbapi.VideoID) (*javdbapi.VideoDetail, error) {
+	f.detailCalls = append(f.detailCalls, id)
+	return f.detail, f.detailErr
+}
+
+func (f *fakeFetcher) Reviews(_ context.Context, id javdbapi.VideoID) ([]javdbapi.Review, error) {
+	f.reviewCalls = append(f.reviewCalls, id)
+	return f.reviews, f.reviewErr
+}
+
+func stubBuilder(fetcher cliapp.Fetcher) fetcherBuilder {
+	return func(*cli.Command, *slog.Logger) (cliapp.Fetcher, error) {
+		return fetcher, nil
+	}
 }
 
 func TestSearchCommandBuildsExpectedRequest(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeExecutor{}
-	cmd := newCommand(executor, io.Discard, io.Discard)
+	fetcher := &fakeFetcher{}
+	cmd := newCommand(stubBuilder(fetcher), io.Discard, io.Discard)
 
 	err := cmd.Run(context.Background(), []string{
 		"javdbapi",
@@ -45,60 +88,72 @@ func TestSearchCommandBuildsExpectedRequest(t *testing.T) {
 		"--keyword", "VR",
 		"--page", "2",
 		"--max-pages", "3",
-		"--output", "both",
-		"--output-dir", "./custom-output",
+		"--output", "console",
 		"--stale-after", "48h",
-		"--timeout", "45s",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, cliapp.CommandSearch, executor.listReq.Command)
-	assert.Equal(t, 2, executor.listReq.Page)
-	assert.Equal(t, 3, executor.listReq.MaxPages)
-	assert.Equal(t, cliapp.OutputBoth, executor.listReq.Shared.OutputMode)
-	assert.Equal(t, "./custom-output", executor.listReq.Shared.OutputDir)
-	assert.Equal(t, 48*time.Hour, executor.listReq.Shared.StaleAfter)
-	assert.NotNil(t, executor.listReq.Search)
-	assert.Equal(t, javdbapi.SearchQuery{Keyword: "VR"}, *executor.listReq.Search)
+	require.Len(t, fetcher.searchCalls, 1)
+	assert.Equal(t, javdbapi.SearchQuery{Keyword: "VR", Page: 2}, fetcher.searchCalls[0])
 }
 
 func TestVideoCommandRejectsPaginationFlags(t *testing.T) {
 	t.Parallel()
 
-	cmd := newCommand(&fakeExecutor{}, io.Discard, io.Discard)
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), io.Discard, io.Discard)
 	err := cmd.Run(context.Background(), []string{
 		"javdbapi",
 		"video",
-		"--path", "/v/ZNdEbV",
+		"--id", "ZNdEbV",
 		"--page", "2",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "flag provided but not defined")
 }
 
+func TestVideoCommandRequiresID(t *testing.T) {
+	t.Parallel()
+
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), io.Discard, io.Discard)
+	err := cmd.Run(context.Background(), []string{"javdbapi", "video"})
+	require.Error(t, err)
+}
+
 func TestVideoCommandBuildsVideoRequest(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeExecutor{}
+	fetcher := &fakeFetcher{
+		detail:  &javdbapi.VideoDetail{Summary: javdbapi.VideoSummary{ID: "ZNdEbV", Code: "ZND-001"}},
+		reviews: []javdbapi.Review{},
+	}
 	var stdout bytes.Buffer
-	cmd := newCommand(executor, &stdout, io.Discard)
+	cmd := newCommand(stubBuilder(fetcher), &stdout, io.Discard)
 
 	err := cmd.Run(context.Background(), []string{
 		"javdbapi",
 		"video",
-		"--url", "https://javdb.com/v/ZNdEbV",
+		"--id", "ZNdEbV",
 		"--output", "console",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "https://javdb.com/v/ZNdEbV", executor.videoReq.URL)
-	assert.Equal(t, cliapp.OutputConsole, executor.videoReq.Shared.OutputMode)
+	require.Len(t, fetcher.detailCalls, 1)
+	assert.Equal(t, javdbapi.VideoID("ZNdEbV"), fetcher.detailCalls[0])
+	assert.Contains(t, stdout.String(), "ZND-001")
+}
+
+func TestVideoCommandRejectsInvalidID(t *testing.T) {
+	t.Parallel()
+
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), io.Discard, io.Discard)
+	err := cmd.Run(context.Background(), []string{"javdbapi", "video", "--id", ""})
+	require.Error(t, err)
 }
 
 func TestSearchCommandDoesNotLogDoneOnZeroSummaryError(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeExecutor{listErr: assert.AnError}
+	fetcher := &fakeFetcher{pageErr: assert.AnError}
 	var stderr bytes.Buffer
-	cmd := newCommand(executor, io.Discard, &stderr)
+	cmd := newCommand(stubBuilder(fetcher), io.Discard, &stderr)
 
 	err := cmd.Run(context.Background(), []string{
 		"javdbapi",
@@ -107,6 +162,37 @@ func TestSearchCommandDoesNotLogDoneOnZeroSummaryError(t *testing.T) {
 	})
 	require.ErrorIs(t, err, assert.AnError)
 	assert.NotContains(t, stderr.String(), "msg=done")
+}
+
+func TestConcurrencyFlagRejectsOutOfRangeValues(t *testing.T) {
+	t.Parallel()
+
+	cases := []int{0, 17}
+	for _, c := range cases {
+		cmd := newCommand(stubBuilder(&fakeFetcher{}), io.Discard, io.Discard)
+		err := cmd.Run(context.Background(), []string{
+			"javdbapi",
+			"search",
+			"--keyword", "VR",
+			"--concurrency", strconv.Itoa(c),
+		})
+		require.Error(t, err)
+		assert.Equal(t, "--concurrency must be between 1 and 16", err.Error())
+	}
+}
+
+func TestRateFlagRejectsNegativeValue(t *testing.T) {
+	t.Parallel()
+
+	cmd := newCommand(buildRealFetcher, io.Discard, io.Discard)
+	err := cmd.Run(context.Background(), []string{
+		"javdbapi",
+		"video",
+		"--id", "ZNdEbV",
+		"--rate", "-1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RequestsPerSecond must be > 0")
 }
 
 func TestRootVersionFlagPrintsBuildMetadata(t *testing.T) {
@@ -123,7 +209,7 @@ func TestRootVersionFlagPrintsBuildMetadata(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := newCommand(&fakeExecutor{}, &stdout, &stderr)
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), &stdout, &stderr)
 
 	err := cmd.Run(context.Background(), []string{"javdbapi", "--version"})
 	require.NoError(t, err)
@@ -149,7 +235,7 @@ func TestVersionCommandPrintsBuildMetadata(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := newCommand(&fakeExecutor{}, &stdout, &stderr)
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), &stdout, &stderr)
 
 	err := cmd.Run(context.Background(), []string{"javdbapi", "version"})
 	require.NoError(t, err)
@@ -165,7 +251,7 @@ func TestRootHelpShowsUsageForDataCommands(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
-	cmd := newCommand(&fakeExecutor{}, &stdout, io.Discard)
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), &stdout, io.Discard)
 
 	err := cmd.Run(context.Background(), []string{"javdbapi", "--help"})
 	require.NoError(t, err)
@@ -230,15 +316,15 @@ func TestSubcommandHelpShowsReadableUsageValues(t *testing.T) {
 			want: []string{
 				"fetch full video detail",
 				"output mode (file|console|both) (default: file)",
-				"video path, e.g. /v/ZNdEbV",
-				"full video URL; host must match --base-url",
+				"video ID, e.g. ZNdEbV",
+				"javdbapi video --id ZNdEbV",
 			},
 		},
 	}
 
 	for _, tc := range cases {
 		var stdout bytes.Buffer
-		cmd := newCommand(&fakeExecutor{}, &stdout, io.Discard)
+		cmd := newCommand(stubBuilder(&fakeFetcher{}), &stdout, io.Discard)
 		err := cmd.Run(context.Background(), tc.args)
 		require.NoError(t, err)
 		for _, want := range tc.want {
@@ -251,7 +337,7 @@ func TestSharedOutputHelpShowsSingleDefaultValue(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
-	cmd := newCommand(&fakeExecutor{}, &stdout, io.Discard)
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), &stdout, io.Discard)
 
 	err := cmd.Run(context.Background(), []string{"javdbapi", "home", "--help"})
 	require.NoError(t, err)
@@ -262,8 +348,8 @@ func TestSharedOutputHelpShowsSingleDefaultValue(t *testing.T) {
 func TestHomeCommandNormalizesReadableDefaultsToOmittedWireValues(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeExecutor{}
-	cmd := newCommand(executor, io.Discard, io.Discard)
+	fetcher := &fakeFetcher{}
+	cmd := newCommand(stubBuilder(fetcher), io.Discard, io.Discard)
 
 	err := cmd.Run(context.Background(), []string{
 		"javdbapi",
@@ -273,17 +359,17 @@ func TestHomeCommandNormalizesReadableDefaultsToOmittedWireValues(t *testing.T) 
 		"--sort", "publish",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, executor.listReq.Home)
-	assert.Equal(t, javdbapi.HomeType(""), executor.listReq.Home.Type)
-	assert.Equal(t, javdbapi.HomeFilter(""), executor.listReq.Home.Filter)
-	assert.Equal(t, javdbapi.HomeSort(""), executor.listReq.Home.Sort)
+	require.Len(t, fetcher.homeCalls, 1)
+	assert.Equal(t, javdbapi.HomeType(""), fetcher.homeCalls[0].Type)
+	assert.Equal(t, javdbapi.HomeFilter(""), fetcher.homeCalls[0].Filter)
+	assert.Equal(t, javdbapi.HomeSort(""), fetcher.homeCalls[0].Sort)
 }
 
 func TestActorCommandAcceptsLegacyAliasesButStoresNormalizedRequestValues(t *testing.T) {
 	t.Parallel()
 
-	executor := &fakeExecutor{}
-	cmd := newCommand(executor, io.Discard, io.Discard)
+	fetcher := &fakeFetcher{}
+	cmd := newCommand(stubBuilder(fetcher), io.Discard, io.Discard)
 
 	err := cmd.Run(context.Background(), []string{
 		"javdbapi",
@@ -292,8 +378,27 @@ func TestActorCommandAcceptsLegacyAliasesButStoresNormalizedRequestValues(t *tes
 		"--filter", "c,d",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, executor.listReq.Actor)
-	assert.Equal(t, []javdbapi.ActorFilter{"c", "d"}, executor.listReq.Actor.Filters)
+	require.Len(t, fetcher.actorCalls, 1)
+	assert.Equal(t, javdbapi.ActorID("neRNX"), fetcher.actorCalls[0].ActorID)
+	assert.Equal(t, []javdbapi.ActorFilter{"c", "d"}, fetcher.actorCalls[0].Filters)
+}
+
+func TestMakerCommandParsesTypedMakerID(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &fakeFetcher{}
+	cmd := newCommand(stubBuilder(fetcher), io.Discard, io.Discard)
+
+	err := cmd.Run(context.Background(), []string{
+		"javdbapi",
+		"maker",
+		"--id", "7R",
+		"--filter", "playable",
+	})
+	require.NoError(t, err)
+	require.Len(t, fetcher.makerCalls, 1)
+	assert.Equal(t, javdbapi.MakerID("7R"), fetcher.makerCalls[0].MakerID)
+	assert.Equal(t, javdbapi.MakerFilter("playable"), fetcher.makerCalls[0].Filter)
 }
 
 func TestCommandValidationRejectsInvalidReadableEnums(t *testing.T) {
@@ -323,7 +428,7 @@ func TestCommandValidationRejectsInvalidReadableEnums(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := newCommand(&fakeExecutor{}, io.Discard, io.Discard)
+			cmd := newCommand(stubBuilder(&fakeFetcher{}), io.Discard, io.Discard)
 			err := cmd.Run(context.Background(), tc.args)
 			require.Error(t, err)
 			assert.Equal(t, tc.wantErr, err.Error())
@@ -345,7 +450,7 @@ func TestVersionCommandPrintsDefaultBuildMetadata(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := newCommand(&fakeExecutor{}, &stdout, &stderr)
+	cmd := newCommand(stubBuilder(&fakeFetcher{}), &stdout, &stderr)
 
 	err := cmd.Run(context.Background(), []string{"javdbapi", "version"})
 	require.NoError(t, err)

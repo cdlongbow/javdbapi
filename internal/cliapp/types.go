@@ -26,19 +26,18 @@ const (
 	OutputBoth    OutputMode = "both"
 )
 
+// SharedOptions carries execution options into the cliapp Run functions. SDK
+// construction parameters (base URL, proxy, user agent, timeout, rate/retry
+// policy) live entirely in cmd/javdbapi, since cliapp only ever talks to a
+// Fetcher and never builds a javdbapi.Client itself.
 type SharedOptions struct {
-	OutputMode OutputMode
-	OutputDir  string
-	StaleAfter time.Duration
-	Timeout    time.Duration
-	Delay      time.Duration
-	BaseURL    string
-	ProxyURL   string
-	UserAgent  string
-	Debug      bool
-	Stdout     io.Writer
-	Logger     *slog.Logger
-	FailFast   bool
+	OutputMode  OutputMode
+	OutputDir   string
+	StaleAfter  time.Duration
+	Concurrency int
+	FailFast    bool
+	Stdout      io.Writer
+	Logger      *slog.Logger
 }
 
 type ListRequest struct {
@@ -48,29 +47,32 @@ type ListRequest struct {
 	MaxPages int
 	Home     *javdbapi.HomeQuery
 	Search   *javdbapi.SearchQuery
-	Maker    *javdbapi.MakerQuery
-	Actor    *javdbapi.ActorQuery
+	Maker    *javdbapi.MakerVideosQuery
+	Actor    *javdbapi.ActorVideosQuery
 	Ranking  *javdbapi.RankingQuery
 }
 
 type VideoRequest struct {
 	Shared SharedOptions
-	Path   string
-	URL    string
+	ID     javdbapi.VideoID
 }
 
 type VideoRef struct {
-	Path  string
+	ID    javdbapi.VideoID
 	Title string
 	Code  string
 	Page  int
 }
 
+// Summary reports command-wide outcomes. PartialFailed counts videos whose
+// Detail persisted successfully but whose Reviews fetch failed; it is never
+// conflated with Failed, which counts videos that produced no usable output.
 type Summary struct {
-	PagesScanned int
-	Candidates   int
-	Deduplicated int
-	Fetched      int
-	SkippedFresh int
-	Failed       int
+	PagesScanned  int
+	Candidates    int
+	Deduplicated  int
+	Fetched       int
+	SkippedFresh  int
+	Failed        int
+	PartialFailed int
 }

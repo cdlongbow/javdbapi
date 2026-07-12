@@ -1,149 +1,110 @@
 package javdbapi
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/PuerkitoBio/goquery"
-
-	"github.com/RPbro/javdbapi/internal/parser"
-	"github.com/RPbro/javdbapi/internal/web"
+	"github.com/RPbro/javdbapi/internal/siteurl"
 )
 
-func (c *Client) Home(ctx context.Context, query HomeQuery) ([]Video, error) {
-	route := "/"
-	if strings.TrimSpace(string(query.Type)) != "" {
-		route = "/" + string(query.Type)
+func (c *Client) Home(ctx context.Context, query HomeQuery) (Page[VideoSummary], error) {
+	if !query.Type.valid() {
+		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid home type %q", ErrInvalidQuery, query.Type)
+	}
+	if !query.Filter.valid() {
+		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid home filter %q", ErrInvalidQuery, query.Filter)
+	}
+	if !query.Sort.valid() {
+		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid home sort %q", ErrInvalidQuery, query.Sort)
+	}
+	page, err := normalizeQueryPage(query.Page)
+	if err != nil {
+		return Page[VideoSummary]{}, err
 	}
 
-	return c.fetchList(ctx, route, map[string]string{
-		"vft":    string(query.Filter),
-		"vst":    string(query.Sort),
-		"page":   pageValue(query.Page),
-		"locale": "zh",
-	})
+	target, err := siteurl.Home(c.baseURL, string(query.Type), string(query.Filter), string(query.Sort), page, string(c.locale))
+	if err != nil {
+		return Page[VideoSummary]{}, &OpError{Op: "home.build_url", Err: err}
+	}
+	return c.fetchList(ctx, "home", target, page)
 }
 
-func (c *Client) Search(ctx context.Context, query SearchQuery) ([]Video, error) {
+func (c *Client) Search(ctx context.Context, query SearchQuery) (Page[VideoSummary], error) {
 	if strings.TrimSpace(query.Keyword) == "" {
-		return nil, fmt.Errorf("%w: missing keyword", ErrInvalidQuery)
+		return Page[VideoSummary]{}, fmt.Errorf("%w: search keyword must not be empty", ErrInvalidQuery)
+	}
+	page, err := normalizeQueryPage(query.Page)
+	if err != nil {
+		return Page[VideoSummary]{}, err
 	}
 
-	return c.fetchList(ctx, "/search", map[string]string{
-		"q":      query.Keyword,
-		"f":      "all",
-		"page":   pageValue(query.Page),
-		"locale": "zh",
-	})
+	target, err := siteurl.Search(c.baseURL, query.Keyword, page, string(c.locale))
+	if err != nil {
+		return Page[VideoSummary]{}, &OpError{Op: "search.build_url", Err: err}
+	}
+	return c.fetchList(ctx, "search", target, page)
 }
 
-func (c *Client) Maker(ctx context.Context, query MakerQuery) ([]Video, error) {
-	if strings.TrimSpace(query.MakerID) == "" {
-		return nil, fmt.Errorf("%w: missing maker id", ErrInvalidQuery)
+func (c *Client) MakerVideos(ctx context.Context, query MakerVideosQuery) (Page[VideoSummary], error) {
+	if !query.Filter.valid() {
+		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid maker filter %q", ErrInvalidQuery, query.Filter)
+	}
+	sortType, err := query.Sort.sortTypeValue()
+	if err != nil {
+		return Page[VideoSummary]{}, err
+	}
+	page, err := normalizeQueryPage(query.Page)
+	if err != nil {
+		return Page[VideoSummary]{}, err
 	}
 
-	return c.fetchList(ctx, "/makers/"+query.MakerID, map[string]string{
-		"f":      string(query.Filter),
-		"page":   pageValue(query.Page),
-		"locale": "zh",
-	})
+	target, err := siteurl.MakerVideos(c.baseURL, string(query.MakerID), string(query.Filter), sortType, page, string(c.locale))
+	if err != nil {
+		return Page[VideoSummary]{}, &OpError{Op: "maker_videos.build_url", Err: err}
+	}
+	return c.fetchList(ctx, "maker_videos", target, page)
 }
 
-func (c *Client) Actor(ctx context.Context, query ActorQuery) ([]Video, error) {
-	if strings.TrimSpace(query.ActorID) == "" {
-		return nil, fmt.Errorf("%w: missing actor id", ErrInvalidQuery)
-	}
-
-	values := make([]string, 0, len(query.Filters))
-	for _, filter := range query.Filters {
-		v := strings.TrimSpace(string(filter))
-		if v != "" {
-			values = append(values, v)
+func (c *Client) ActorVideos(ctx context.Context, query ActorVideosQuery) (Page[VideoSummary], error) {
+	filters := make([]string, 0, len(query.Filters))
+	for _, f := range query.Filters {
+		if !f.valid() {
+			return Page[VideoSummary]{}, fmt.Errorf("%w: invalid actor filter %q", ErrInvalidQuery, f)
 		}
+		filters = append(filters, string(f))
+	}
+	sortType, err := query.Sort.sortTypeValue()
+	if err != nil {
+		return Page[VideoSummary]{}, err
+	}
+	page, err := normalizeQueryPage(query.Page)
+	if err != nil {
+		return Page[VideoSummary]{}, err
 	}
 
-	return c.fetchList(ctx, "/actors/"+query.ActorID, map[string]string{
-		"t":      strings.Join(values, ","),
-		"page":   pageValue(query.Page),
-		"locale": "zh",
-	})
+	target, err := siteurl.ActorVideos(c.baseURL, string(query.ActorID), filters, sortType, page, string(c.locale))
+	if err != nil {
+		return Page[VideoSummary]{}, &OpError{Op: "actor_videos.build_url", Err: err}
+	}
+	return c.fetchList(ctx, "actor_videos", target, page)
 }
 
-func (c *Client) Ranking(ctx context.Context, query RankingQuery) ([]Video, error) {
-	return c.fetchList(ctx, "/rankings/movies", map[string]string{
-		"p":      string(query.Period),
-		"t":      string(query.Type),
-		"page":   pageValue(query.Page),
-		"locale": "zh",
-	})
-}
-
-func (c *Client) fetchList(ctx context.Context, route string, params map[string]string) ([]Video, error) {
-	rawURL, err := web.BuildURL(c.baseURL, route, params)
+func (c *Client) Ranking(ctx context.Context, query RankingQuery) (Page[VideoSummary], error) {
+	if !query.Period.valid() {
+		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid ranking period %q", ErrInvalidQuery, query.Period)
+	}
+	if !query.Type.valid() {
+		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid ranking type %q", ErrInvalidQuery, query.Type)
+	}
+	page, err := normalizeQueryPage(query.Page)
 	if err != nil {
-		return nil, fmt.Errorf("build list url: %w", err)
+		return Page[VideoSummary]{}, err
 	}
 
-	body, err := c.runner.Get(ctx, rawURL)
+	target, err := siteurl.Ranking(c.baseURL, string(query.Period), string(query.Type), page, string(c.locale))
 	if err != nil {
-		var use *web.UnexpectedStatusError
-		if errors.As(err, &use) {
-			return nil, fmt.Errorf("%w: %w", ErrUnexpectedStatus, err)
-		}
-		return nil, fmt.Errorf("fetch list page: %w", err)
+		return Page[VideoSummary]{}, &OpError{Op: "ranking.build_url", Err: err}
 	}
-
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("parse list document: %w", err)
-	}
-
-	emptyMessage := strings.TrimSpace(doc.Find(".empty-message").First().Text())
-	if doc.Find("div.item").Length() == 0 && strings.Contains(emptyMessage, "暫無內容") {
-		return nil, fmt.Errorf("%w: %s", ErrEmptyResult, rawURL)
-	}
-
-	summaries, err := parser.ParseList(doc)
-	if err != nil {
-		return nil, fmt.Errorf("parse list page: %w", err)
-	}
-
-	videos := make([]Video, 0, len(summaries))
-	for _, summary := range summaries {
-		videoURL, err := web.BuildURL(c.baseURL, summary.Path, map[string]string{
-			"locale": "zh",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("build video url: %w", err)
-		}
-
-		videos = append(videos, Video{
-			ID:          summary.Path,
-			Title:       summary.Title,
-			Code:        summary.Code,
-			URL:         videoURL,
-			CoverURL:    summary.CoverURL,
-			PublishedAt: summary.PublishedAt,
-			Score:       summary.Score,
-			ScoreCount:  summary.ScoreCount,
-			HasSubtitle: summary.HasSubtitle,
-		})
-	}
-
-	if len(videos) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrEmptyResult, rawURL)
-	}
-
-	return videos, nil
-}
-
-func pageValue(page int) string {
-	if page <= 0 {
-		page = 1
-	}
-	return strconv.Itoa(page)
+	return c.fetchList(ctx, "ranking", target, page)
 }

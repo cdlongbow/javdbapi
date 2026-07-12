@@ -1,10 +1,10 @@
 # javdbapi
 
-`javdbapi` is a Go library for querying `javdb.com` with an explicit `Client` plus typed query objects.
+`javdbapi` is a Go library for querying `javdb.com` with an explicit `Client`, typed IDs, and typed query objects. It separates video **summaries** (from list pages), **detail** (actors, tags, screenshots, magnets), and **reviews** into independent requests.
 
 ## Requirements
 
-- Go `1.26.2`
+- Go `1.26.5`
 
 ## Install
 
@@ -25,12 +25,17 @@ import (
 )
 
 func main() {
-	client, err := javdbapi.NewClient(javdbapi.Config{
+	client, err := javdbapi.NewClient(javdbapi.ClientConfig{
 		BaseURL:   "https://javdb.com",
-		Timeout:   30 * time.Second,
-		ProxyURL:  "",
 		UserAgent: "",
-		Debug:     false,
+		HTTP: javdbapi.HTTPConfig{
+			Timeout:  30 * time.Second,
+			ProxyURL: "",
+		},
+		RateLimit: javdbapi.RateLimitPolicy{
+			RequestsPerSecond: 1,
+			Burst:             1,
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -40,7 +45,20 @@ func main() {
 }
 ```
 
-`BaseURL`, `Timeout`, and `UserAgent` have defaults when empty.
+`BaseURL`, `Locale`, `UserAgent`, `HTTP.Timeout`, `HTTP.MaxResponseBytes`, `Retry`, and `RateLimit` all have defaults when left zero-valued. `HTTP.Client` cannot be combined with `HTTP.Timeout` or `HTTP.ProxyURL` — supply one or the other, not both.
+
+## Typed IDs
+
+Every resource ID (`VideoID`, `ActorID`, `MakerID`, `DirectorID`, `SeriesID`) is a distinct string type, constructed only through its `Parse*` function. The SDK never accepts arbitrary absolute URLs as input — only validated in-site IDs:
+
+```go
+videoID, err := javdbapi.ParseVideoID("ZNdEbV")
+if err != nil {
+	log.Fatal(err)
+}
+
+fmt.Println(client.VideoURL(videoID)) // https://javdb.com/v/ZNdEbV?locale=zh
+```
 
 ## Library API
 
@@ -50,13 +68,12 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/RPbro/javdbapi"
 )
 
 func main() {
-	client, err := javdbapi.NewClient(javdbapi.Config{Timeout: 30 * time.Second})
+	client, err := javdbapi.NewClient(javdbapi.ClientConfig{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -72,7 +89,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("home: %d", len(home))
+	log.Printf("home: %d items, has_next=%v", len(home.Items), home.HasNext)
 
 	search, err := client.Search(ctx, javdbapi.SearchQuery{
 		Keyword: "VR",
@@ -81,27 +98,35 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("search: %d", len(search))
+	log.Printf("search: %d items", len(search.Items))
 
-	maker, err := client.Maker(ctx, javdbapi.MakerQuery{
-		MakerID: "7R",
+	makerID, err := javdbapi.ParseMakerID("7R")
+	if err != nil {
+		log.Fatal(err)
+	}
+	maker, err := client.MakerVideos(ctx, javdbapi.MakerVideosQuery{
+		MakerID: makerID,
 		Filter:  javdbapi.MakerFilterAll,
 		Page:    1,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("maker: %d", len(maker))
+	log.Printf("maker: %d items", len(maker.Items))
 
-	actor, err := client.Actor(ctx, javdbapi.ActorQuery{
-		ActorID: "neRNX",
+	actorID, err := javdbapi.ParseActorID("neRNX")
+	if err != nil {
+		log.Fatal(err)
+	}
+	actor, err := client.ActorVideos(ctx, javdbapi.ActorVideosQuery{
+		ActorID: actorID,
 		Filters: []javdbapi.ActorFilter{javdbapi.ActorFilterAll},
 		Page:    1,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("actor: %d", len(actor))
+	log.Printf("actor: %d items", len(actor.Items))
 
 	ranking, err := client.Ranking(ctx, javdbapi.RankingQuery{
 		Period: javdbapi.RankingPeriodWeekly,
@@ -111,21 +136,37 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("ranking: %d", len(ranking))
+	log.Printf("ranking: %d items", len(ranking.Items))
 
-	video, err := client.Video(ctx, javdbapi.VideoQuery{
-		Path: "/v/ZNdEbV",
-	})
+	videoID, err := javdbapi.ParseVideoID("ZNdEbV")
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("video: %s", video.Code)
+
+	detail, err := client.Detail(ctx, videoID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("detail: %s, %d actors, %d magnets", detail.Summary.Code, len(detail.Actors), len(detail.Magnets))
+
+	reviews, err := client.Reviews(ctx, videoID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("reviews: %d", len(reviews))
 }
 ```
 
-`VideoQuery` supports either `Path` (relative path) or `URL` (full video URL).
+Key points:
 
-List endpoints (`Home`, `Search`, `Maker`, `Actor`, `Ranking`) return summary-level `Video` items from list pages. Use `Video` when you need full detail fields such as `PreviewURL`, `Actors`, `Tags`, `Screenshots`, `Magnets`, and `Reviews`.
+- `Home`, `Search`, `MakerVideos`, `ActorVideos`, and `Ranking` all return `Page[VideoSummary]`. `Page` never claims a total page count — the site only exposes `rel="next"` pagination, so check `HasNext` to decide whether to keep paginating.
+- `Detail` and `Reviews` are independent requests against `VideoID`. Fetching `Detail` never implicitly fetches `Reviews`, and a `Reviews` failure never invalidates an already-fetched `Detail`.
+- Optional `VideoDetail` sections (`Director`, `Maker`, `Series`) are `nil` pointers when absent; slice sections (`Actors`, `Tags`, `Screenshots`, `Magnets`) are always non-nil, empty slices rather than `nil` — including in JSON, which encodes `[]`, never `null`.
+- All requests issued through one `*Client` share the same rate limiter, so concurrent callers never exceed the configured request budget.
+
+## Errors
+
+Sentinel errors (`ErrInvalidConfig`, `ErrInvalidQuery`, `ErrNotFound`, `ErrRateLimited`, `ErrEmptyResult`, `ErrParse`) are checked with `errors.Is`. `OpError` wraps the failing operation and (when safe) a query-stripped request URL; `HTTPError` reports the raw non-2xx status code and maps 404/429 onto `ErrNotFound`/`ErrRateLimited` via `errors.Is`.
 
 ## CLI
 
@@ -140,7 +181,7 @@ Quick start:
 ```bash
 javdbapi search --keyword VR --output console
 javdbapi actor --id neRNX --filter cnsub,download --stale-after 48h
-javdbapi video --path /v/ZNdEbV --output console
+javdbapi video --id ZNdEbV --output console
 ```
 
 ### Shared Flags
@@ -150,13 +191,17 @@ javdbapi video --path /v/ZNdEbV --output console
 | `--output`      | string   | `file`              | Output mode: `file`, `console`, `both`                                                              |
 | `--output-dir`  | string   | `./output`          | Directory for output files                                                                          |
 | `--stale-after` | duration | `24h`               | Skip fetch when cache is fresh; `0s` bypasses ordinary freshness checks for normal cache timestamps |
+| `--concurrency` | int      | `2`                 | Number of videos fetched concurrently for list commands, `1`-`16`                                   |
 | `--timeout`     | duration | `30s`               | HTTP request timeout                                                                                |
-| `--delay`       | duration | `1s`                | Delay between requests                                                                              |
 | `--proxy-url`   | string   | —                   | HTTP/SOCKS5 proxy URL                                                                               |
 | `--base-url`    | string   | `https://javdb.com` | Override base URL                                                                                   |
 | `--user-agent`  | string   | —                   | Custom User-Agent header                                                                            |
-| `--debug`       | bool     | `false`             | Enable debug logs on stderr                                                                         |
-| `--fail-fast`   | bool     | `false`             | Stop list processing after the first failing video                                                  |
+| `--rate`        | float    | `1`                 | Requests per second shared across all workers of one command invocation                             |
+| `--burst`       | int      | `1`                 | Rate limiter burst size                                                                             |
+| `--debug`       | bool     | `false`             | Enable debug logs on stderr; also raises the SDK client's own log level                             |
+| `--fail-fast`   | bool     | `false`             | Stop on the first hard error instead of accumulating failures                                       |
+
+`--concurrency` bounds how many videos are fetched in parallel within one list command; `--rate`/`--burst` bound how fast the shared `Client` issues requests overall. Raising `--concurrency` without raising `--rate` mostly increases queuing against the same request budget, not real fetch throughput.
 
 ### search
 
@@ -234,15 +279,16 @@ javdbapi ranking --period daily --type western --stale-after 0s --output console
 
 Rules:
 
-- exactly one of `--path` or `--url` is required
-- when `--url` is used, its host must match the host implied by `--base-url`
+- `--id` is required and must be a bare in-site video ID (e.g. `ZNdEbV`), not a path or URL.
 
 Examples:
 
 ```bash
-javdbapi video --path /v/ZNdEbV --output console
-javdbapi video --url https://javdb.com/v/ZNdEbV --base-url https://javdb.com --output both
+javdbapi video --id ZNdEbV --output console
+javdbapi video --id ZNdEbV --base-url https://javdb.com --output both
 ```
+
+A video's cached document tracks `Detail` and `Reviews` freshness independently. If a prior run persisted `Detail` but the `Reviews` fetch failed, the failure is recorded under `partial_errors` in the cache document and the next invocation retries only the stale `Reviews`, reusing the already-fresh `Detail`.
 
 ### AI / Programmatic Usage
 
@@ -252,17 +298,22 @@ javdbapi video --url https://javdb.com/v/ZNdEbV --base-url https://javdb.com --o
 - Exit code `1` may still arrive after partial valid NDJSON has already been written.
 - Empty stdout with exit code `0` can mean a fresh cache hit.
 - `--stale-after 0s` can be used when the caller wants to bypass ordinary fresh-cache checks.
-- For `video`, exactly one of `--path` or `--url` is required.
-- For `video`, the host in `--url` must match the host implied by `--base-url`.
+- For `video`, `--id` is required and must be a bare in-site video ID.
 - Enum validation errors use the stable `invalid --<flag> "<value>": <reason>` format in this iteration.
+- `--concurrency` out of the `1`-`16` range fails with the stable message `--concurrency must be between 1 and 16`.
+- A video whose `Detail` succeeded but whose `Reviews` fetch failed still persists successfully by default; only `--fail-fast` turns a `Reviews` failure into a command-level error.
 
 Programmatic examples:
 
 ```bash
-javdbapi video --path /v/ZNdEbV --output console | jq '.video.code'
-javdbapi video --url https://javdb.com/v/ZNdEbV --proxy-url http://127.0.0.1:7890 --output console | jq '.metadata.path'
-javdbapi ranking --period weekly --type censored --stale-after 0s --output console | jq -c '.video.code'
+javdbapi video --id ZNdEbV --output console | jq '.detail.summary.code'
+javdbapi video --id ZNdEbV --proxy-url http://127.0.0.1:7890 --output console | jq '.metadata.sources'
+javdbapi ranking --period weekly --type censored --stale-after 0s --output console | jq -c '.detail.summary.code'
 ```
+
+## Cache Schema
+
+Cache documents are written with `"schema_version": 2` and use atomic writes (write to a temp file, then rename) so a crash mid-write never corrupts an existing cache file. v1 cache files (missing or mismatched `schema_version`) are always treated as a cache miss — there is no migration path. `detail_updated_at`, `reviews_updated_at`, and `reviews_last_attempted_at` track freshness independently, and array fields (`reviews`, `partial_errors`, `sources`, and the `detail` sub-object's own array fields) always serialize as `[]`, never `null`.
 
 ## Test Strategy
 
@@ -273,3 +324,19 @@ go test ./...
 ```
 
 Default tests are offline and deterministic, using local fixtures and `httptest`. They do not require external network access.
+
+### Race detector
+
+```bash
+make race
+```
+
+Runs the full suite with `-race`, covering the CLI's bounded concurrent worker pool and the shared rate limiter.
+
+### Opt-in live integration test
+
+```bash
+make integration
+```
+
+Runs `internal/scrape/integration_test.go`'s `TestLiveSearchContract` against the real site. It is skipped unless `JAVDB_INTEGRATION=1` is set, is never part of the default `test` target, and is not run in CI. A `403`, `429`, or network error here reflects a site-access/environment limitation, not a fixture parser regression.
