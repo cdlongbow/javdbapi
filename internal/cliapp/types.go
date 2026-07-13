@@ -33,6 +33,7 @@ const (
 type SharedOptions struct {
 	OutputMode  OutputMode
 	OutputDir   string
+	SubDir      string
 	StaleAfter  time.Duration
 	Concurrency int
 	FailFast    bool
@@ -55,6 +56,7 @@ type ListRequest struct {
 type VideoRequest struct {
 	Shared SharedOptions
 	ID     javdbapi.VideoID
+	Code   string
 }
 
 type VideoRef struct {

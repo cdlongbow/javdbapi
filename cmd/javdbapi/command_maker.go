@@ -31,5 +31,5 @@ func newMakerCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Wr
 				Filter:  filter,
 			},
 		}, nil
-	})
+	}, nil)
 }

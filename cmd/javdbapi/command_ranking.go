@@ -31,5 +31,5 @@ func newRankingCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.
 				Type:   rankingType,
 			},
 		}, nil
-	})
+	}, nil)
 }

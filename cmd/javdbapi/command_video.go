@@ -21,7 +21,8 @@ func newVideoCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Wr
 			&cli.StringFlag{Name: "id", Required: true, Usage: "video ID, e.g. ZNdEbV"},
 		),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			id, err := javdbapi.ParseVideoID(cmd.String("id"))
+			rawID := cmd.String("id")
+			id, err := javdbapi.ResolveVideoID(rawID)
 			if err != nil {
 				return err
 			}
@@ -38,7 +39,9 @@ func newVideoCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Wr
 			}
 			store := clioutput.NewStore(shared.OutputDir, time.Now)
 
-			req := cliapp.VideoRequest{Shared: shared, ID: id}
+			// Use the raw input as the code for naming; falls back to resolved ID
+			// if the raw input wasn't a valid code.
+			req := cliapp.VideoRequest{Shared: shared, ID: id, Code: rawID}
 			summary, err := cliapp.RunVideoCommand(ctx, fetcher, store, req)
 			logSummary(shared.Logger, summary, err)
 			return err

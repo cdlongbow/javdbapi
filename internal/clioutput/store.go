@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -21,6 +23,7 @@ func (s CacheState) NeedsReviews() bool { return !s.ReviewsFresh }
 
 type Store struct {
 	outputDir string
+	subDir    string
 	now       func() time.Time
 	// rename is overridable in tests to force an atomic-write failure.
 	rename func(oldpath, newpath string) error
@@ -37,8 +40,23 @@ func NewStore(outputDir string, now func() time.Time) *Store {
 	}
 }
 
+// NewSubdirStore creates a Store that writes files into outputDir/<subDir>/
+func NewSubdirStore(outputDir, subDir string, now func() time.Time) *Store {
+	return &Store{
+		outputDir: filepath.Join(outputDir, subDir),
+		now:       now,
+		rename:    os.Rename,
+	}
+}
+
 func (s *Store) FilePath(id string) (string, error) {
 	return FilePath(s.outputDir, id)
+}
+
+// FilePathWithCode returns the cache file path, preferring the video code
+// (番号) over the internal ID for the filename.
+func (s *Store) FilePathWithCode(code, id string) (string, error) {
+	return FilePathWithCode(s.outputDir, code, id)
 }
 
 // Load reads the cache file for id. A document that is missing, corrupt, or
@@ -51,6 +69,19 @@ func (s *Store) Load(id string, staleAfter time.Duration) (CacheState, error) {
 	if err != nil {
 		return CacheState{}, err
 	}
+	return s.loadAtPath(filePath, staleAfter)
+}
+
+// LoadByCode loads cache by code (番号) first, falling back to id.
+func (s *Store) LoadByCode(code, id string, staleAfter time.Duration) (CacheState, error) {
+	filePath, err := s.FilePathWithCode(code, id)
+	if err != nil {
+		return CacheState{}, err
+	}
+	return s.loadAtPath(filePath, staleAfter)
+}
+
+func (s *Store) loadAtPath(filePath string, staleAfter time.Duration) (CacheState, error) {
 	state := CacheState{FilePath: filePath}
 
 	body, err := os.ReadFile(filePath)
@@ -77,12 +108,14 @@ func (s *Store) Load(id string, staleAfter time.Duration) (CacheState, error) {
 	return state, nil
 }
 
-// WriteFile atomically persists doc, keyed by doc.Detail.Summary.ID. Sources
-// are merged with any existing cache file's sources before serialization; a
-// rename failure leaves the previous valid document untouched.
+// WriteFile atomically persists doc, keyed by doc.Detail.Summary.Code (番号)
+// when available, falling back to Summary.ID. Sources are merged with any
+// existing cache file's sources before serialization; a rename failure leaves
+// the previous valid document untouched.
 func (s *Store) WriteFile(doc Document) error {
+	code := doc.Detail.Summary.Code
 	id := string(doc.Detail.Summary.ID)
-	filePath, err := s.FilePath(id)
+	filePath, err := s.FilePathWithCode(code, id)
 	if err != nil {
 		return err
 	}
@@ -91,7 +124,7 @@ func (s *Store) WriteFile(doc Document) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	doc, err = s.mergeSources(id, doc)
+	doc, err = s.mergeSources(code, id, doc)
 	if err != nil {
 		return err
 	}
@@ -155,8 +188,8 @@ func MergeSources(existing []Source, next []Source) []Source {
 	return merged
 }
 
-func (s *Store) mergeSources(id string, doc Document) (Document, error) {
-	state, err := s.Load(id, 0)
+func (s *Store) mergeSources(code, id string, doc Document) (Document, error) {
+	state, err := s.LoadByCode(code, id, 0)
 	if err != nil {
 		return Document{}, err
 	}
@@ -166,4 +199,98 @@ func (s *Store) mergeSources(id string, doc Document) (Document, error) {
 
 	doc.Metadata.Sources = MergeSources(state.Document.Metadata.Sources, doc.Metadata.Sources)
 	return doc, nil
+}
+
+// NFOPath returns the .nfo file path for the given video ID, placed in the
+// same directory as the JSON cache file.
+func (s *Store) NFOPath(id string) (string, error) {
+	jsonPath, err := s.FilePath(id)
+	if err != nil {
+		return "", err
+	}
+	return jsonPath[:len(jsonPath)-len(".json")] + ".nfo", nil
+}
+
+// WriteNFO generates a Jellyfin/Plex-compatible .nfo file from the document.
+func (s *Store) WriteNFO(path string, doc Document) error {
+	d := doc.Detail
+	var sb strings.Builder
+
+	sb.WriteString("<musicvideo>\n")
+
+	code := d.Summary.Code
+	title := d.Summary.Title
+	cleanName := code
+	if cleanName == "" {
+		cleanName = title
+	}
+	sb.WriteString(fmt.Sprintf("  <title>%s</title>\n", escapeNFO(cleanName)))
+	sb.WriteString(fmt.Sprintf("  <plot>%s</plot>\n", escapeNFO(title)))
+
+	if !d.Summary.PublishedAt.IsZero() {
+		sb.WriteString(fmt.Sprintf("  <year>%s</year>\n", d.Summary.PublishedAt.Format("2006-01-02")))
+	}
+
+	if d.DurationMinutes != nil && *d.DurationMinutes > 0 {
+		sb.WriteString(fmt.Sprintf("  <runtime>%d</runtime>\n", *d.DurationMinutes))
+	}
+
+	if d.Summary.Score.Value > 0 {
+		sb.WriteString(fmt.Sprintf("  <rating>%.1f</rating>\n", d.Summary.Score.Value))
+	}
+
+	if d.Summary.Score.Count > 0 {
+		sb.WriteString(fmt.Sprintf("  <votes>%d</votes>\n", d.Summary.Score.Count))
+	}
+
+	for _, tag := range d.Tags {
+		sb.WriteString(fmt.Sprintf("  <tag>%s</tag>\n", escapeNFO(tag.Name)))
+	}
+
+	for _, actor := range d.Actors {
+		sb.WriteString("  <actor>\n")
+		sb.WriteString(fmt.Sprintf("    <name>%s</name>\n", escapeNFO(actor.Name)))
+		sb.WriteString("    <type>actor</type>\n")
+		sb.WriteString("  </actor>\n")
+	}
+
+	if d.Maker != nil && d.Maker.Name != "" {
+		sb.WriteString(fmt.Sprintf("  <studio>%s</studio>\n", escapeNFO(d.Maker.Name)))
+	}
+
+	if d.Director != nil && d.Director.Name != "" {
+		sb.WriteString(fmt.Sprintf("  <director>%s</director>\n", escapeNFO(d.Director.Name)))
+	}
+
+	if d.Summary.CoverURL != "" {
+		sb.WriteString(fmt.Sprintf("  <thumb>%s</thumb>\n", d.Summary.CoverURL))
+	}
+
+	for _, m := range d.Magnets {
+		sb.WriteString(fmt.Sprintf("  <source>%s</source>\n", escapeNFO(m.URI)))
+	}
+
+	sb.WriteString("</musicvideo>")
+
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		dir := path[:idx]
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create nfo dir: %w", err)
+		}
+	} else if path != "" {
+		if err := os.MkdirAll(".", 0o755); err != nil {
+			return fmt.Errorf("create nfo dir: %w", err)
+		}
+	}
+
+	return os.WriteFile(path, []byte(sb.String()), 0o644)
+}
+
+func escapeNFO(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	return s
 }

@@ -195,7 +195,7 @@ func TestClientVideoURL(t *testing.T) {
 		RateLimit: javdbapi.RateLimitPolicy{Disabled: true},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "https://javdb.com/v/P9Jkq9?locale=zh", client.VideoURL("P9Jkq9"))
+	assert.Equal(t, "https://javdb573.com/v/P9Jkq9?locale=zh", client.VideoURL("P9Jkq9"))
 }
 
 func TestClientRankingBuildsFixedRoute(t *testing.T) {

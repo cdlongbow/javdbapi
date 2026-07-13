@@ -1,9 +1,11 @@
 package javdbapi
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type VideoID string
@@ -24,7 +26,42 @@ func parseResourceID(kind, raw string) (string, error) {
 
 func ParseVideoID(raw string) (VideoID, error) {
 	value, err := parseResourceID("video", raw)
-	return VideoID(value), err
+	if err != nil {
+		return "", err
+	}
+	return VideoID(value), nil
+}
+
+// ResolveVideoID first tries to parse the raw string as a video ID. If that
+// fails (e.g. the caller supplied a code like "DLDSS-271"), it performs a
+// search to look up the internal ID.
+func ResolveVideoID(raw string) (VideoID, error) {
+	id, err := ParseVideoID(raw)
+	if err == nil {
+		return id, nil
+	}
+	return resolveVideoIDByCode(raw)
+}
+
+func resolveVideoIDByCode(code string) (VideoID, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", fmt.Errorf("%w: empty code", ErrInvalidQuery)
+	}
+	client, err := NewClient(ClientConfig{})
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	page, err := client.Search(ctx, SearchQuery{Keyword: code, Page: 1})
+	if err != nil {
+		return "", err
+	}
+	if len(page.Items) == 0 {
+		return "", fmt.Errorf("%w: no video found for code %q", ErrNotFound, code)
+	}
+	return page.Items[0].ID, nil
 }
 
 func ParseActorID(raw string) (ActorID, error) {

@@ -247,7 +247,7 @@ func RunVideoCommand(ctx context.Context, fetcher Fetcher, store *clioutput.Stor
 		return Summary{}, fmt.Errorf("video id is required")
 	}
 
-	ref := VideoRef{ID: req.ID}
+	ref := VideoRef{ID: req.ID, Code: req.Code}
 	doc, persist, summary, fetchErr := fetchDetail(ctx, fetcher, store, req.Shared, ref, []clioutput.Source{clioutput.NewVideoSource(string(req.ID))})
 
 	if persist {
@@ -268,7 +268,7 @@ func RunVideoCommand(ctx context.Context, fetcher Fetcher, store *clioutput.Stor
 // failure is recorded as a PartialError, with Failed left untouched so the
 // video is not counted as a full failure.
 func fetchDetail(ctx context.Context, fetcher Fetcher, store *clioutput.Store, shared SharedOptions, ref VideoRef, sources []clioutput.Source) (doc clioutput.Document, persist bool, summary Summary, err error) {
-	state, loadErr := loadCacheForMode(store, shared, ref.ID)
+	state, loadErr := loadCacheForMode(store, shared, string(ref.Code), ref.ID)
 	if loadErr != nil {
 		summary.Failed++
 		return clioutput.Document{}, false, summary, loadErr
@@ -367,7 +367,7 @@ func reviewErrorMessage(kind string) string {
 // loadCacheForMode skips creating the output directory just to check
 // freshness in pure console mode, so a read-only preview never has the
 // side effect of creating a cache directory on disk.
-func loadCacheForMode(store *clioutput.Store, shared SharedOptions, id javdbapi.VideoID) (clioutput.CacheState, error) {
+func loadCacheForMode(store *clioutput.Store, shared SharedOptions, code string, id javdbapi.VideoID) (clioutput.CacheState, error) {
 	if shared.OutputMode == OutputConsole {
 		if _, err := os.Stat(shared.OutputDir); errors.Is(err, os.ErrNotExist) {
 			filePath, pathErr := store.FilePath(string(id))
@@ -377,7 +377,7 @@ func loadCacheForMode(store *clioutput.Store, shared SharedOptions, id javdbapi.
 			return clioutput.CacheState{FilePath: filePath}, nil
 		}
 	}
-	return store.Load(string(id), shared.StaleAfter)
+	return store.LoadByCode(code, string(id), shared.StaleAfter)
 }
 
 func persistDocument(store *clioutput.Store, shared SharedOptions, doc clioutput.Document) error {

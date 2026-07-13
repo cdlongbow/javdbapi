@@ -37,5 +37,5 @@ func newHomeCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Wri
 				Sort:   homeSort,
 			},
 		}, nil
-	})
+	}, nil)
 }

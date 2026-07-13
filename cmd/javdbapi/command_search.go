@@ -19,5 +19,7 @@ func newSearchCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.W
 			MaxPages: cmd.Int("max-pages"),
 			Search:   &javdbapi.SearchQuery{Keyword: cmd.String("keyword")},
 		}, nil
+	}, func(cmd *cli.Command) string {
+		return cmd.String("keyword")
 	})
 }

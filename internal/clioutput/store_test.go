@@ -21,7 +21,7 @@ func fixedNow() time.Time {
 func TestLoadTreatsV1AsMiss(t *testing.T) {
 	store := NewStore(t.TempDir(), fixedNow)
 	require.NoError(t, os.WriteFile(filepath.Join(store.outputDir, "P9Jkq9.json"), []byte(`{"metadata":{}}`), 0o644))
-	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	state, err := store.LoadByCode("ABC-123", "P9Jkq9", 24*time.Hour)
 	require.NoError(t, err)
 	assert.False(t, state.DetailFresh)
 	assert.Nil(t, state.Document)
@@ -36,7 +36,7 @@ func TestLoadReportsMissingFile(t *testing.T) {
 	t.Parallel()
 
 	store := NewStore(t.TempDir(), fixedNow)
-	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	state, err := store.LoadByCode("ABC-123", "P9Jkq9", 24*time.Hour)
 	require.NoError(t, err)
 	assert.Nil(t, state.Document)
 	assert.False(t, state.DetailFresh)
@@ -62,7 +62,7 @@ func TestWriteFileThenLoadReportsIndependentFreshness(t *testing.T) {
 	}
 	require.NoError(t, store.WriteFile(doc))
 
-	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	state, err := store.LoadByCode("ABC-123", "P9Jkq9", 24*time.Hour)
 	require.NoError(t, err)
 	require.NotNil(t, state.Document)
 	assert.True(t, state.DetailFresh)
@@ -104,7 +104,7 @@ func TestWriteFileMergesSourcesWithoutDuplicates(t *testing.T) {
 	}
 	require.NoError(t, store.WriteFile(second))
 
-	loaded, err := store.Load("P9Jkq9", 24*time.Hour)
+	loaded, err := store.LoadByCode("ABC-123", "P9Jkq9", 24*time.Hour)
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Document)
 	assert.Len(t, loaded.Document.Metadata.Sources, 2)
@@ -154,7 +154,7 @@ func TestWriteFileAtomicRenameFailureLeavesPreviousDocumentIntact(t *testing.T) 
 	err := store.WriteFile(second)
 	require.Error(t, err)
 
-	state, err := store.Load("P9Jkq9", 24*time.Hour)
+	state, err := store.LoadByCode("FIRST", "P9Jkq9", 24*time.Hour)
 	require.NoError(t, err)
 	require.NotNil(t, state.Document)
 	assert.Equal(t, "FIRST", state.Document.Detail.Summary.Code)

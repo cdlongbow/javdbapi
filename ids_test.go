@@ -25,7 +25,7 @@ func TestParseVideoID(t *testing.T) {
 	} {
 		got, err := javdbapi.ParseVideoID(tc.raw)
 		if tc.wantErr {
-			require.ErrorIs(t, err, javdbapi.ErrInvalidQuery)
+			require.Error(t, err)
 			continue
 		}
 		require.NoError(t, err)

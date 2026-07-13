@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"time"
 
 	cli "github.com/urfave/cli/v3"
@@ -78,6 +80,7 @@ func newListCommand(
 	stdout io.Writer,
 	stderr io.Writer,
 	build func(*cli.Command) (cliapp.ListRequest, error),
+	subDirFunc func(*cli.Command) string,
 ) *cli.Command {
 	return &cli.Command{
 		Name:      name,
@@ -100,7 +103,21 @@ func newListCommand(
 			if err != nil {
 				return err
 			}
-			store := clioutput.NewStore(shared.OutputDir, time.Now)
+
+			storeDir := shared.OutputDir
+			if subDirFunc != nil {
+				sd := subDirFunc(cmd)
+				// For actor command, try to resolve actor name from ID
+				if name == "actor" && sd != "" {
+					if actorName, nerr := resolveActorName(ctx, fetcher, sd); nerr == nil && actorName != "" {
+						sd = actorName
+					}
+				}
+				if sd = sanitizeFileName(sd); sd != "" {
+					storeDir = filepath.Join(shared.OutputDir, sd)
+				}
+			}
+			store := clioutput.NewStore(storeDir, time.Now)
 
 			summary, err := cliapp.RunListCommand(ctx, fetcher, store, req)
 			logSummary(shared.Logger, summary, err)
@@ -120,6 +137,7 @@ func buildRealFetcher(cmd *cli.Command, logger *slog.Logger) (cliapp.Fetcher, er
 		HTTP: javdbapi.HTTPConfig{
 			Timeout:  cmd.Duration("timeout"),
 			ProxyURL: cmd.String("proxy-url"),
+			TrawlURL: cmd.String("trawl-url"),
 		},
 		RateLimit: javdbapi.RateLimitPolicy{
 			RequestsPerSecond: cmd.Float64("rate"),
@@ -155,4 +173,22 @@ func logSummary(logger *slog.Logger, s cliapp.Summary, err error) {
 
 func summaryIsZero(s cliapp.Summary) bool {
 	return s == (cliapp.Summary{})
+}
+
+// sanitizeFileName removes characters that are unsafe for directory names.
+func sanitizeFileName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, ":", "_")
+	name = strings.ReplaceAll(name, "*", "_")
+	name = strings.ReplaceAll(name, "?", "_")
+	name = strings.ReplaceAll(name, "\"", "_")
+	name = strings.ReplaceAll(name, "<", "_")
+	name = strings.ReplaceAll(name, ">", "_")
+	name = strings.ReplaceAll(name, "|", "_")
+	if len(name) > 100 {
+		name = name[:100]
+	}
+	return name
 }

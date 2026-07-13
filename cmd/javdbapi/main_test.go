@@ -378,9 +378,11 @@ func TestActorCommandAcceptsLegacyAliasesButStoresNormalizedRequestValues(t *tes
 		"--filter", "c,d",
 	})
 	require.NoError(t, err)
-	require.Len(t, fetcher.actorCalls, 1)
+	require.Len(t, fetcher.actorCalls, 2)
 	assert.Equal(t, javdbapi.ActorID("neRNX"), fetcher.actorCalls[0].ActorID)
-	assert.Equal(t, []javdbapi.ActorFilter{"c", "d"}, fetcher.actorCalls[0].Filters)
+	assert.Equal(t, []javdbapi.ActorFilter{javdbapi.ActorFilterAll}, fetcher.actorCalls[0].Filters)
+	assert.Equal(t, javdbapi.ActorID("neRNX"), fetcher.actorCalls[1].ActorID)
+	assert.Equal(t, []javdbapi.ActorFilter{"c", "d"}, fetcher.actorCalls[1].Filters)
 }
 
 func TestMakerCommandParsesTypedMakerID(t *testing.T) {
