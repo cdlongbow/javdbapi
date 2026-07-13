@@ -18,7 +18,6 @@ func sharedFlags() []cli.Flag {
 		&cli.IntFlag{Name: "concurrency", Value: 2, Usage: "number of videos fetched concurrently (1-16)"},
 		&cli.DurationFlag{Name: "timeout", Value: 30 * time.Second, Usage: "HTTP request timeout"},
 		&cli.StringFlag{Name: "proxy-url", Usage: "HTTP/SOCKS5 proxy URL, e.g. http://127.0.0.1:7890"},
-		&cli.StringFlag{Name: "trawl-url", Usage: "TRAWL instance URL for CF bypass, e.g. http://localhost:8191"},
 		&cli.StringFlag{Name: "base-url", Value: "https://javdb573.com", Usage: "override base URL"},
 		&cli.StringFlag{Name: "user-agent", Usage: "custom User-Agent header"},
 		&cli.Float64Flag{Name: "rate", Value: 1, Usage: "requests per second"},

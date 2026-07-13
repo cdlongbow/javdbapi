@@ -54,7 +54,6 @@ func NewClient(config ClientConfig) (*Client, error) {
 		UserAgent:         cfg.UserAgent,
 		MaxResponseBytes:  cfg.HTTP.MaxResponseBytes,
 		CheckRedirect:     func(req *http.Request, via []*http.Request) error { return siteurl.SameHostRedirect(req.URL, via) },
-		TrawlURL:          cfg.HTTP.TrawlURL,
 		RateLimitDisabled: cfg.RateLimit.Disabled,
 		RateLimit:         cfg.RateLimit.RequestsPerSecond,
 		RateBurst:         cfg.RateLimit.Burst,

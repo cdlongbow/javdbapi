@@ -137,7 +137,6 @@ func buildRealFetcher(cmd *cli.Command, logger *slog.Logger) (cliapp.Fetcher, er
 		HTTP: javdbapi.HTTPConfig{
 			Timeout:  cmd.Duration("timeout"),
 			ProxyURL: cmd.String("proxy-url"),
-			TrawlURL: cmd.String("trawl-url"),
 		},
 		RateLimit: javdbapi.RateLimitPolicy{
 			RequestsPerSecond: cmd.Float64("rate"),

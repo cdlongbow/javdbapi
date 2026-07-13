@@ -26,7 +26,6 @@ type HTTPConfig struct {
 	Timeout          time.Duration
 	ProxyURL         string
 	MaxResponseBytes int64
-	TrawlURL         string
 }
 
 type RetryPolicy struct {

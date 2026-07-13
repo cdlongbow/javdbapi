@@ -43,7 +43,6 @@ type Config struct {
 	UserAgent        string
 	MaxResponseBytes int64
 	CheckRedirect    func(req *http.Request, via []*http.Request) error
-	TrawlURL         string
 
 	RateLimitDisabled bool
 	RateLimit         float64
@@ -91,16 +90,6 @@ func New(cfg Config) (*Client, error) {
 	if cfg.CheckRedirect != nil {
 		cloned := *httpClient
 		cloned.CheckRedirect = cfg.CheckRedirect
-		httpClient = &cloned
-	}
-
-	if cfg.TrawlURL != "" {
-		cloned := *httpClient
-		base := httpClient.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		cloned.Transport = newTrawlTransport(base, cfg.TrawlURL)
 		httpClient = &cloned
 	}
 
