@@ -168,18 +168,8 @@ javdbapi ranking --period weekly --type censored --output console
 ### 各命令参数
 
 **search**
-
-支持按关键词、番号、演员名等多种方式搜索：
-
 ```bash
-# 关键词搜索
-javdbapi search --keyword "VR" --output console
-
-# 番号搜索（直接输入番号即可）
-javdbapi search --keyword "DLDSS-271" --output console
-
-# 翻页搜索
-javdbapi search --keyword "VR" --page 2 --max-pages 3 --output both
+javdbapi search --keyword "VR" --page 1 --max-pages 3 --output both
 ```
 
 **home**
