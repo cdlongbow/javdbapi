@@ -1,18 +1,18 @@
 # javdbapi
 
-`javdbapi` is a Go library for querying `javdb.com` with an explicit `Client`, typed IDs, and typed query objects. It separates video **summaries** (from list pages), **detail** (actors, tags, screenshots, magnets), and **reviews** into independent requests.
+`javdbapi` 是一个用于查询 `javdb.com` 的 Go library，公开接口由显式 `Client`、强类型 ID 和强类型查询对象组成。视频**摘要**（列表页）、**详情**（演员、标签、截图、磁力链接）与**评论**是三个相互独立的请求。
 
-## Requirements
+## 环境要求
 
 - Go `1.26.5`
 
-## Install
+## 安装
 
 ```bash
 go get github.com/RPbro/javdbapi
 ```
 
-## Initialize Client
+## 初始化 Client
 
 ```go
 package main
@@ -45,11 +45,11 @@ func main() {
 }
 ```
 
-`BaseURL`, `Locale`, `UserAgent`, `HTTP.Timeout`, `HTTP.MaxResponseBytes`, `Retry`, and `RateLimit` all have defaults when left zero-valued. `HTTP.Client` cannot be combined with `HTTP.Timeout` or `HTTP.ProxyURL` — supply one or the other, not both.
+`BaseURL`、`Locale`、`UserAgent`、`HTTP.Timeout`、`HTTP.MaxResponseBytes`、`Retry`、`RateLimit` 留空（零值）时都会使用默认值。`HTTP.Client` 不能与 `HTTP.Timeout` 或 `HTTP.ProxyURL` 同时设置——二选一。
 
-## Typed IDs
+## 强类型 ID
 
-Every resource ID (`VideoID`, `ActorID`, `MakerID`, `DirectorID`, `SeriesID`) is a distinct string type, constructed only through its `Parse*` function. The SDK never accepts arbitrary absolute URLs as input — only validated in-site IDs:
+每一种资源 ID（`VideoID`、`ActorID`、`MakerID`、`DirectorID`、`SeriesID`）都是独立的字符串类型，只能通过对应的 `Parse*` 函数构造。SDK 从不接受任意的绝对 URL 作为输入——只接受经过校验的站内 ID：
 
 ```go
 videoID, err := javdbapi.ParseVideoID("ZNdEbV")
@@ -157,26 +157,26 @@ func main() {
 }
 ```
 
-Key points:
+要点：
 
-- `Home`, `Search`, `MakerVideos`, `ActorVideos`, and `Ranking` all return `Page[VideoSummary]`. `Page` never claims a total page count — the site only exposes `rel="next"` pagination, so check `HasNext` to decide whether to keep paginating.
-- `Detail` and `Reviews` are independent requests against `VideoID`. Fetching `Detail` never implicitly fetches `Reviews`, and a `Reviews` failure never invalidates an already-fetched `Detail`.
-- Optional `VideoDetail` sections (`Director`, `Maker`, `Series`) are `nil` pointers when absent; slice sections (`Actors`, `Tags`, `Screenshots`, `Magnets`) are always non-nil, empty slices rather than `nil` — including in JSON, which encodes `[]`, never `null`.
-- All requests issued through one `*Client` share the same rate limiter, so concurrent callers never exceed the configured request budget.
+- `Home`、`Search`、`MakerVideos`、`ActorVideos`、`Ranking` 都返回 `Page[VideoSummary]`。`Page` 从不声明总页数——站点只提供 `rel="next"` 分页标记，请通过 `HasNext` 判断是否继续翻页。
+- `Detail` 与 `Reviews` 是针对 `VideoID` 的两个独立请求。获取 `Detail` 不会隐式拉取 `Reviews`；`Reviews` 拉取失败也不会使已经拉取成功的 `Detail` 失效。
+- `VideoDetail` 中的可选字段（`Director`、`Maker`、`Series`）缺失时为 `nil` 指针；切片字段（`Actors`、`Tags`、`Screenshots`、`Magnets`）始终是非 `nil` 的空切片——包括 JSON 序列化时，始终编码为 `[]`，而不是 `null`。
+- 同一个 `*Client` 发出的所有请求共享同一个限流器，因此并发调用者永远不会超过配置的请求预算。
 
-## Errors
+## 错误处理
 
-Sentinel errors (`ErrInvalidConfig`, `ErrInvalidQuery`, `ErrNotFound`, `ErrRateLimited`, `ErrEmptyResult`, `ErrParse`) are checked with `errors.Is`. `OpError` wraps the failing operation and (when safe) a query-stripped request URL; `HTTPError` reports the raw non-2xx status code and maps 404/429 onto `ErrNotFound`/`ErrRateLimited` via `errors.Is`.
+哨兵错误（`ErrInvalidConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrRateLimited`、`ErrEmptyResult`、`ErrParse`）通过 `errors.Is` 判断。`OpError` 包装失败的操作名以及（在安全的情况下）去除了查询参数的请求 URL；`HTTPError` 报告原始的非 2xx 状态码，并通过 `errors.Is` 将 404/429 映射到 `ErrNotFound`/`ErrRateLimited`。
 
 ## CLI
 
-Install:
+安装：
 
 ```bash
 go install github.com/RPbro/javdbapi/cmd/javdbapi@latest
 ```
 
-Quick start:
+快速开始：
 
 ```bash
 javdbapi search --keyword VR --output console
@@ -184,28 +184,28 @@ javdbapi actor --id neRNX --filter cnsub,download --stale-after 48h
 javdbapi video --id ZNdEbV --output console
 ```
 
-### Shared Flags
+### 共享参数
 
-| Flag            | Type     | Default             | Description                                                                                         |
-| --------------- | -------- | ------------------- | --------------------------------------------------------------------------------------------------- |
-| `--output`      | string   | `file`              | Output mode: `file`, `console`, `both`                                                              |
-| `--output-dir`  | string   | `./output`          | Directory for output files                                                                          |
-| `--stale-after` | duration | `24h`               | Skip fetch when cache is fresh; `0s` bypasses ordinary freshness checks for normal cache timestamps |
-| `--concurrency` | int      | `2`                 | Number of videos fetched concurrently for list commands, `1`-`16`                                   |
-| `--timeout`     | duration | `30s`               | HTTP request timeout                                                                                |
-| `--proxy-url`   | string   | —                   | HTTP/SOCKS5 proxy URL                                                                               |
-| `--base-url`    | string   | `https://javdb.com` | Override base URL                                                                                   |
-| `--user-agent`  | string   | —                   | Custom User-Agent header                                                                            |
-| `--rate`        | float    | `1`                 | Requests per second shared across all workers of one command invocation                             |
-| `--burst`       | int      | `1`                 | Rate limiter burst size                                                                             |
-| `--debug`       | bool     | `false`             | Enable debug logs on stderr; also raises the SDK client's own log level                             |
-| `--fail-fast`   | bool     | `false`             | Stop on the first hard error instead of accumulating failures                                       |
+| 参数            | 类型     | 默认值              | 说明                                                            |
+| --------------- | -------- | ------------------- | --------------------------------------------------------------- |
+| `--output`      | string   | `file`              | 输出模式：`file`、`console`、`both`                             |
+| `--output-dir`  | string   | `./output`          | 输出文件目录                                                    |
+| `--stale-after` | duration | `24h`               | 缓存新鲜时跳过抓取；对普通缓存时间戳，`0s` 会绕过常规新鲜度检查 |
+| `--concurrency` | int      | `2`                 | 列表命令并发抓取视频的数量，取值范围 `1`-`16`                   |
+| `--timeout`     | duration | `30s`               | HTTP 请求超时                                                   |
+| `--proxy-url`   | string   | —                   | HTTP/SOCKS5 代理地址                                            |
+| `--base-url`    | string   | `https://javdb.com` | 覆盖基础地址                                                    |
+| `--user-agent`  | string   | —                   | 自定义 User-Agent                                               |
+| `--rate`        | float    | `1`                 | 一次命令调用内所有 worker 共享的每秒请求数                      |
+| `--burst`       | int      | `1`                 | 限流器的突发容量                                                |
+| `--debug`       | bool     | `false`             | 在 stderr 输出 debug 日志；同时提升 SDK client 自身的日志级别   |
+| `--fail-fast`   | bool     | `false`             | 遇到第一个硬失败立即停止，而不是持续累计失败                    |
 
-`--concurrency` bounds how many videos are fetched in parallel within one list command; `--rate`/`--burst` bound how fast the shared `Client` issues requests overall. Raising `--concurrency` without raising `--rate` mostly increases queuing against the same request budget, not real fetch throughput.
+`--concurrency` 限制的是一次列表命令内并发抓取视频的数量；`--rate`/`--burst` 限制的是共享 `Client` 整体的请求速率。只调高 `--concurrency` 而不调高 `--rate`，多半只是增加了排队等待，而不会真正提升抓取吞吐量。
 
 ### search
 
-Examples:
+示例：
 
 ```bash
 javdbapi search --keyword VR
@@ -214,15 +214,15 @@ javdbapi search --keyword VR --page 2 --max-pages 3 --output both
 
 ### home
 
-Canonical values:
+可读值：
 
-| Flag       | Values                                     | Notes                                        |
-| ---------- | ------------------------------------------ | -------------------------------------------- |
-| `--type`   | `all`, `censored`, `uncensored`, `western` | `all` keeps the omitted request behavior     |
-| `--filter` | `all`, `download`, `cnsub`, `review`       | `all` keeps the omitted request behavior     |
-| `--sort`   | `publish`, `magnet`                        | `publish` keeps the omitted request behavior |
+| 参数       | 可选值                                     | 说明                               |
+| ---------- | ------------------------------------------ | ---------------------------------- |
+| `--type`   | `all`、`censored`、`uncensored`、`western` | `all` 保持当前省略时的请求语义     |
+| `--filter` | `all`、`download`、`cnsub`、`review`       | `all` 保持当前省略时的请求语义     |
+| `--sort`   | `publish`、`magnet`                        | `publish` 保持当前省略时的请求语义 |
 
-Examples:
+示例：
 
 ```bash
 javdbapi home --type censored --filter all --sort publish
@@ -231,13 +231,13 @@ javdbapi home --sort magnet --output console
 
 ### actor
 
-Canonical values:
+可读值：
 
-| Flag       | Values                                           | Notes                                                     |
-| ---------- | ------------------------------------------------ | --------------------------------------------------------- |
-| `--filter` | `all`, `playable`, `single`, `download`, `cnsub` | comma-separated; legacy `p,s,d,c` aliases remain accepted |
+| 参数       | 可选值                                           | 说明                           |
+| ---------- | ------------------------------------------------ | ------------------------------ |
+| `--filter` | `all`、`playable`、`single`、`download`、`cnsub` | 逗号分隔；兼容旧别名 `p,s,d,c` |
 
-Examples:
+示例：
 
 ```bash
 javdbapi actor --id neRNX --filter cnsub,download
@@ -246,13 +246,13 @@ javdbapi actor --id neRNX --filter c,d
 
 ### maker
 
-Canonical values:
+可读值：
 
-| Flag       | Values                                                      | Notes                                    |
-| ---------- | ----------------------------------------------------------- | ---------------------------------------- |
-| `--filter` | `all`, `playable`, `single`, `download`, `cnsub`, `preview` | `all` keeps the omitted request behavior |
+| 参数       | 可选值                                                      | 说明                           |
+| ---------- | ----------------------------------------------------------- | ------------------------------ |
+| `--filter` | `all`、`playable`、`single`、`download`、`cnsub`、`preview` | `all` 保持当前省略时的请求语义 |
 
-Examples:
+示例：
 
 ```bash
 javdbapi maker --id 7R
@@ -261,14 +261,14 @@ javdbapi maker --id 7R --filter playable --output both
 
 ### ranking
 
-Canonical values:
+可读值：
 
-| Flag       | Values                              | Notes    |
-| ---------- | ----------------------------------- | -------- |
-| `--period` | `daily`, `weekly`, `monthly`        | required |
-| `--type`   | `censored`, `uncensored`, `western` | required |
+| 参数       | 可选值                              | 说明 |
+| ---------- | ----------------------------------- | ---- |
+| `--period` | `daily`、`weekly`、`monthly`        | 必填 |
+| `--type`   | `censored`、`uncensored`、`western` | 必填 |
 
-Examples:
+示例：
 
 ```bash
 javdbapi ranking --period weekly --type censored
@@ -277,33 +277,33 @@ javdbapi ranking --period daily --type western --stale-after 0s --output console
 
 ### video
 
-Rules:
+规则：
 
-- `--id` is required and must be a bare in-site video ID (e.g. `ZNdEbV`), not a path or URL.
+- `--id` 必填，且必须是纯粹的站内视频 ID（例如 `ZNdEbV`），而不是路径或 URL。
 
-Examples:
+示例：
 
 ```bash
 javdbapi video --id ZNdEbV --output console
 javdbapi video --id ZNdEbV --base-url https://javdb.com --output both
 ```
 
-A video's cached document tracks `Detail` and `Reviews` freshness independently. If a prior run persisted `Detail` but the `Reviews` fetch failed, the failure is recorded under `partial_errors` in the cache document and the next invocation retries only the stale `Reviews`, reusing the already-fresh `Detail`.
+每个视频的缓存文档会独立追踪 `Detail` 与 `Reviews` 的新鲜度。如果上一次运行已经成功持久化 `Detail`，但 `Reviews` 拉取失败，失败信息会记录在缓存文档的 `partial_errors` 字段中；下一次调用只会重新拉取过期的 `Reviews`，并复用已经是新鲜状态的 `Detail`。
 
-### AI / Programmatic Usage
+### AI / 程序化使用
 
-- For data commands, stdout is JSON-only in `console` and `both`.
-- `help` and `version` write text to stdout.
-- stderr is not JSON and should never be sent to a JSON parser.
-- Exit code `1` may still arrive after partial valid NDJSON has already been written.
-- Empty stdout with exit code `0` can mean a fresh cache hit.
-- `--stale-after 0s` can be used when the caller wants to bypass ordinary fresh-cache checks.
-- For `video`, `--id` is required and must be a bare in-site video ID.
-- Enum validation errors use the stable `invalid --<flag> "<value>": <reason>` format in this iteration.
-- `--concurrency` out of the `1`-`16` range fails with the stable message `--concurrency must be between 1 and 16`.
-- A video whose `Detail` succeeded but whose `Reviews` fetch failed still persists successfully by default; only `--fail-fast` turns a `Reviews` failure into a command-level error.
+- 对数据命令来说，`console` / `both` 模式下 stdout 只输出 JSON。
+- `help` 与 `version` 仍然会向 stdout 输出文本。
+- stderr 不是 JSON，不应直接喂给 parser。
+- 即使最终 exit code 是 `1`，stdout 也可能已经输出了部分有效 NDJSON。
+- exit code 为 `0` 且 stdout 为空，可能表示命中新鲜缓存。
+- `--stale-after 0s` 可用于绕过常规的新鲜缓存判断。
+- 对 `video` 命令来说，`--id` 必填，且必须是纯粹的站内视频 ID。
+- 本轮只保证枚举校验错误使用稳定的 `invalid --<flag> "<value>": <reason>` 格式。
+- `--concurrency` 超出 `1`-`16` 范围时，会返回稳定的错误信息 `--concurrency must be between 1 and 16`。
+- 一个视频即使 `Reviews` 拉取失败，只要 `Detail` 成功，默认情况下依然会正常持久化；只有 `--fail-fast` 才会把 `Reviews` 失败提升为命令级错误。
 
-Programmatic examples:
+程序化示例：
 
 ```bash
 javdbapi video --id ZNdEbV --output console | jq '.detail.summary.code'
@@ -311,32 +311,32 @@ javdbapi video --id ZNdEbV --proxy-url http://127.0.0.1:7890 --output console | 
 javdbapi ranking --period weekly --type censored --stale-after 0s --output console | jq -c '.detail.summary.code'
 ```
 
-## Cache Schema
+## 缓存格式
 
-Cache documents are written with `"schema_version": 2` and use atomic writes (write to a temp file, then rename) so a crash mid-write never corrupts an existing cache file. v1 cache files (missing or mismatched `schema_version`) are always treated as a cache miss — there is no migration path. `detail_updated_at`, `reviews_updated_at`, and `reviews_last_attempted_at` track freshness independently, and array fields (`reviews`, `partial_errors`, `sources`, and the `detail` sub-object's own array fields) always serialize as `[]`, never `null`.
+缓存文档使用 `"schema_version": 2` 写入，并采用原子写入（先写临时文件再 rename），因此中途崩溃永远不会破坏已有的缓存文件。v1 缓存文件（缺少或不匹配 `schema_version`）一律视为缓存缺失——没有迁移路径。`detail_updated_at`、`reviews_updated_at`、`reviews_last_attempted_at` 各自独立追踪新鲜度；数组字段（`reviews`、`partial_errors`、`sources`，以及 `detail` 子对象自身的数组字段）始终序列化为 `[]`，而不是 `null`。
 
-## Test Strategy
+## 测试策略
 
-### Default tests
+### 默认测试
 
 ```bash
 go test ./...
 ```
 
-Default tests are offline and deterministic, using local fixtures and `httptest`. They do not require external network access.
+默认测试是离线且可重复的，依赖本地 fixture 和 `httptest`，不需要外网。
 
-### Race detector
+### 竞态检测
 
 ```bash
 make race
 ```
 
-Runs the full suite with `-race`, covering the CLI's bounded concurrent worker pool and the shared rate limiter.
+以 `-race` 运行完整测试集，覆盖 CLI 的并发 worker pool 和共享限流器。
 
-### Opt-in live integration test
+### 可选的真实环境集成测试
 
 ```bash
 make integration
 ```
 
-Runs `internal/scrape/integration_test.go`'s `TestLiveSearchContract` against the real site. It is skipped unless `JAVDB_INTEGRATION=1` is set, is never part of the default `test` target, and is not run in CI. A `403`, `429`, or network error here reflects a site-access/environment limitation, not a fixture parser regression.
+运行 `internal/scrape/integration_test.go` 中的 `TestLiveSearchContract`，针对真实站点发起请求。除非设置了 `JAVDB_INTEGRATION=1`，否则该测试会被跳过；它不属于默认的 `test` 目标，也不会在 CI 中运行。此处出现 `403`、`429` 或网络错误，反映的是站点访问/环境限制，而不是 fixture parser 的回归问题。
