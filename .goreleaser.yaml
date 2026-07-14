@@ -12,6 +12,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .Date }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
     goos:
       - linux
       - darwin
@@ -52,3 +53,15 @@ changelog:
       - "^ci:"
       - "Merge pull request"
       - "Merge branch"
+  groups:
+    - title: Breaking Changes
+      regexp: '^.*?[a-z]+(\(.+\))?!:.+$'
+      order: 0
+    - title: Features
+      regexp: '^.*?feat(\(.+\))?:.+$'
+      order: 1
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))?:.+$'
+      order: 2
+    - title: Others
+      order: 999
