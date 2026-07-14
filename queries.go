@@ -149,6 +149,10 @@ type ActorDetailQuery struct {
 	ActorID ActorID
 }
 
+type ActorByNameQuery struct {
+	Name string
+}
+
 type RankingPeriod string
 type RankingType string
 

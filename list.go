@@ -66,6 +66,96 @@ func (c *Client) MakerVideos(ctx context.Context, query MakerVideosQuery) (Page[
 	return c.fetchList(ctx, "maker_videos", target, page)
 }
 
+// ActorByName resolves an actor ID from their name by searching and examining
+// the first video's detail page. It prefers a single-work video and picks the
+// closest matching female actor name.
+func (c *Client) ActorByName(ctx context.Context, name string) (ActorID, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("%w: actor name is required", ErrInvalidQuery)
+	}
+
+	// Step 1: search for the name
+	searchPage, err := c.Search(ctx, SearchQuery{Keyword: name, Page: 1})
+	if err != nil || len(searchPage.Items) == 0 {
+		return "", err
+	}
+
+	// Step 2: find a single-work video first, fallback to first video
+	var candidateID VideoID
+	for _, item := range searchPage.Items {
+		detail, err := c.Detail(ctx, item.ID)
+		if err != nil || detail == nil {
+			continue
+		}
+		for _, tag := range detail.Tags {
+			if tag.Name == "單體作品" || tag.Name == "单体作品" {
+				candidateID = item.ID
+				goto found
+			}
+		}
+	}
+	// Fallback: use first video
+	candidateID = searchPage.Items[0].ID
+
+found:
+	detail, err := c.Detail(ctx, candidateID)
+	if err != nil || detail == nil {
+		return "", err
+	}
+
+	// Step 3: find the best matching female actor
+	return findBestMatchingFemaleActor(detail.Actors, name)
+}
+
+// findBestMatchingFemaleActor filters female actors and picks the one whose
+// name is closest to the search keyword. Exact match > contains > prefix > first.
+func findBestMatchingFemaleActor(actors []Actor, keyword string) (ActorID, error) {
+	var females []Actor
+	for _, a := range actors {
+		if a.Gender == GenderFemale {
+			females = append(females, a)
+		}
+	}
+	if len(females) == 0 {
+		return "", fmt.Errorf("no female actor found")
+	}
+
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return females[0].ID, nil
+	}
+
+	// Priority 1: exact match
+	for _, a := range females {
+		if strings.TrimSpace(a.Name) == keyword {
+			return a.ID, nil
+		}
+	}
+
+	// Priority 2: keyword is contained in actor name (or vice versa)
+	for _, a := range females {
+		aname := strings.TrimSpace(a.Name)
+		if strings.Contains(aname, keyword) || strings.Contains(keyword, aname) {
+			return a.ID, nil
+		}
+	}
+
+	// Priority 3: first character match (handles simplified/traditional differences)
+	for _, a := range females {
+		aname := strings.TrimSpace(a.Name)
+		if len(aname) > 0 && len(keyword) > 0 {
+			kFirst := string([]rune(keyword)[:1])
+			aFirst := string([]rune(aname)[:1])
+			if kFirst == aFirst {
+				return a.ID, nil
+			}
+		}
+	}
+
+	// Fallback: return first female actor
+	return females[0].ID, nil
+}
+
 func (c *Client) ActorVideos(ctx context.Context, query ActorVideosQuery) (Page[VideoSummary], error) {
 	filters := make([]string, 0, len(query.Filters))
 	for _, f := range query.Filters {
