@@ -14,6 +14,7 @@ import (
 	javdbapi "github.com/RPbro/javdbapi"
 	"github.com/RPbro/javdbapi/internal/cliapp"
 	"github.com/RPbro/javdbapi/internal/clioutput"
+	"github.com/RPbro/javdbapi/internal/siteurl"
 )
 
 var (
@@ -108,7 +109,7 @@ func newListCommand(
 			storeDir := shared.OutputDir
 			if subDirFunc != nil {
 				sd := subDirFunc(cmd)
-				// For actor command, try to resolve actor name from ID
+				// For actor command, resolve actor name via actor-detail API
 				if name == "actor" && sd != "" {
 					if actorName, nerr := resolveActorName(ctx, fetcher, sd); nerr == nil && actorName != "" {
 						sd = actorName
@@ -125,6 +126,27 @@ func newListCommand(
 			return err
 		},
 	}
+}
+
+// resolveActorName fetches the actor detail page and extracts the first name.
+func resolveActorName(ctx context.Context, fetcher cliapp.Fetcher, actorID string) (string, error) {
+	// Build a minimal client to fetch the actor detail page
+	client, err := javdbapi.NewClient(javdbapi.ClientConfig{})
+	if err != nil {
+		return "", err
+	}
+
+	target, err := siteurl.ActorDetail(client.BaseURL(), actorID, "zh")
+	if err != nil {
+		return "", err
+	}
+
+	body, err := client.GetRaw(ctx, target)
+	if err != nil {
+		return "", err
+	}
+
+	return cliapp.ActorNameFromHTML(body)
 }
 
 // buildRealFetcher constructs one javdbapi.Client per command invocation. The

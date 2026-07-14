@@ -12,8 +12,8 @@ import (
 	"github.com/RPbro/javdbapi/internal/siteurl"
 )
 
-// RunActorDetailCommand fetches the actor detail page and extracts the actor's
-// name and aliases. Output is a single JSON object to stdout.
+// RunActorDetailCommand fetches the actor detail page and outputs JSON with
+// id, name, and aliases.
 func RunActorDetailCommand(ctx context.Context, store *clioutput.Store, req ListRequest) (Summary, error) {
 	if err := validateSharedOptions(req.Shared); err != nil {
 		return Summary{}, err
@@ -85,4 +85,31 @@ func RunActorDetailCommand(ctx context.Context, store *clioutput.Store, req List
 	}
 
 	return Summary{Fetched: 1}, nil
+}
+
+// ActorNameFromHTML extracts the first actor name from the given HTML body.
+func ActorNameFromHTML(body []byte) (string, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+
+	var name string
+	doc.Find(".actor-section-name").Each(func(i int, s *goquery.Selection) {
+		if name == "" {
+			name = strings.TrimSpace(s.Text())
+		}
+	})
+
+	if name == "" {
+		return "", fmt.Errorf("could not find actor name")
+	}
+
+	// Split by comma and return the first name
+	parts := strings.Split(name, ",")
+	firstName := strings.TrimSpace(parts[0])
+	if firstName != "" {
+		return firstName, nil
+	}
+	return name, nil
 }
