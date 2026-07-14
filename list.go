@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/RPbro/javdbapi/internal/scrape"
 	"github.com/RPbro/javdbapi/internal/siteurl"
 )
 
@@ -46,6 +47,121 @@ func (c *Client) Search(ctx context.Context, query SearchQuery) (Page[VideoSumma
 	return c.fetchList(ctx, "search", target, page)
 }
 
+// SearchActors searches for actors by keyword via the site's actor filter.
+func (c *Client) SearchActors(ctx context.Context, keyword string, page int) (Page[ActorSearchItem], error) {
+	if strings.TrimSpace(keyword) == "" {
+		return Page[ActorSearchItem]{}, fmt.Errorf("%w: search keyword must not be empty", ErrInvalidQuery)
+	}
+
+	target, err := siteurl.SearchActors(c.baseURL, keyword, page, string(c.locale))
+	if err != nil {
+		return Page[ActorSearchItem]{}, &OpError{Op: "search_actors.build_url", Err: err}
+	}
+
+	body, err := c.fetcher.Get(ctx, target)
+	if err != nil {
+		return Page[ActorSearchItem]{}, mapFetchErr("search_actors.fetch", target, err)
+	}
+
+	doc, err := newDocument(body)
+	if err != nil {
+		return Page[ActorSearchItem]{}, &OpError{Op: "search_actors.document", URL: sanitizedURL(target), Err: fmt.Errorf("%w: %v", ErrParse, err)}
+	}
+
+	parsed, err := scrape.ParseActorSearch(doc, 1)
+	if err != nil {
+		return Page[ActorSearchItem]{}, mapScrapeErr("search_actors.parse", target, err)
+	}
+
+	items := make([]ActorSearchItem, len(parsed.Value.Items))
+	for i, item := range parsed.Value.Items {
+		items[i] = ActorSearchItem{
+			ID:      ActorID(item.ID),
+			Name:    item.Name,
+			Aliases: item.Aliases,
+		}
+	}
+	return NewPage(page, items, parsed.Value.HasNext), nil
+}
+
+// ActorByName searches for an actor directly via the site's actor search tab
+// (f=actor), extracts the actor ID from the result link, and returns it.
+func (c *Client) ActorByName(ctx context.Context, name string) (ActorID, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("%w: actor name is required", ErrInvalidQuery)
+	}
+
+	normName := NormalizeName(name)
+
+	// Try with normalized name first
+	page, err := c.SearchActors(ctx, normName, 1)
+	if err != nil {
+		// If normalized search fails and differs from original, try original
+		if normName != name {
+			page, err = c.SearchActors(ctx, name, 1)
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if len(page.Items) == 0 {
+		return "", fmt.Errorf("%w: no actor found for %q", ErrNotFound, name)
+	}
+
+	// Pick the best match: exact > alias exact > contains > contains alias > char match
+	for _, item := range page.Items {
+		if item.Name == name || item.Name == normName {
+			return item.ID, nil
+		}
+		for _, alias := range item.Aliases {
+			if alias == name || alias == normName {
+				return item.ID, nil
+			}
+		}
+	}
+	for _, item := range page.Items {
+		if strings.Contains(item.Name, name) || strings.Contains(item.Name, normName) {
+			return item.ID, nil
+		}
+		for _, alias := range item.Aliases {
+			if strings.Contains(alias, name) || strings.Contains(alias, normName) {
+				return item.ID, nil
+			}
+		}
+	}
+	for _, item := range page.Items {
+		if charsOverlap(item.Name, name, normName) {
+			return item.ID, nil
+		}
+		for _, alias := range item.Aliases {
+			if charsOverlap(alias, name, normName) {
+				return item.ID, nil
+			}
+		}
+	}
+	return page.Items[0].ID, nil
+}
+
+// charsOverlap reports whether a and b (or a and c) share at least one character.
+func charsOverlap(a, b, c string) bool {
+	set := make(map[rune]struct{})
+	for _, r := range a {
+		set[r] = struct{}{}
+	}
+	for _, r := range b {
+		if _, ok := set[r]; ok {
+			return true
+		}
+	}
+	for _, r := range c {
+		if _, ok := set[r]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) MakerVideos(ctx context.Context, query MakerVideosQuery) (Page[VideoSummary], error) {
 	if !query.Filter.valid() {
 		return Page[VideoSummary]{}, fmt.Errorf("%w: invalid maker filter %q", ErrInvalidQuery, query.Filter)
@@ -64,96 +180,6 @@ func (c *Client) MakerVideos(ctx context.Context, query MakerVideosQuery) (Page[
 		return Page[VideoSummary]{}, &OpError{Op: "maker_videos.build_url", Err: err}
 	}
 	return c.fetchList(ctx, "maker_videos", target, page)
-}
-
-// ActorByName resolves an actor ID from their name by searching and examining
-// the first video's detail page. It prefers a single-work video and picks the
-// closest matching female actor name.
-func (c *Client) ActorByName(ctx context.Context, name string) (ActorID, error) {
-	if strings.TrimSpace(name) == "" {
-		return "", fmt.Errorf("%w: actor name is required", ErrInvalidQuery)
-	}
-
-	// Step 1: search for the name
-	searchPage, err := c.Search(ctx, SearchQuery{Keyword: name, Page: 1})
-	if err != nil || len(searchPage.Items) == 0 {
-		return "", err
-	}
-
-	// Step 2: find a single-work video first, fallback to first video
-	var candidateID VideoID
-	for _, item := range searchPage.Items {
-		detail, err := c.Detail(ctx, item.ID)
-		if err != nil || detail == nil {
-			continue
-		}
-		for _, tag := range detail.Tags {
-			if tag.Name == "單體作品" || tag.Name == "单体作品" {
-				candidateID = item.ID
-				goto found
-			}
-		}
-	}
-	// Fallback: use first video
-	candidateID = searchPage.Items[0].ID
-
-found:
-	detail, err := c.Detail(ctx, candidateID)
-	if err != nil || detail == nil {
-		return "", err
-	}
-
-	// Step 3: find the best matching female actor
-	return findBestMatchingFemaleActor(detail.Actors, name)
-}
-
-// findBestMatchingFemaleActor filters female actors and picks the one whose
-// name is closest to the search keyword. Exact match > contains > prefix > first.
-func findBestMatchingFemaleActor(actors []Actor, keyword string) (ActorID, error) {
-	var females []Actor
-	for _, a := range actors {
-		if a.Gender == GenderFemale {
-			females = append(females, a)
-		}
-	}
-	if len(females) == 0 {
-		return "", fmt.Errorf("no female actor found")
-	}
-
-	keyword = strings.TrimSpace(keyword)
-	if keyword == "" {
-		return females[0].ID, nil
-	}
-
-	// Priority 1: exact match
-	for _, a := range females {
-		if strings.TrimSpace(a.Name) == keyword {
-			return a.ID, nil
-		}
-	}
-
-	// Priority 2: keyword is contained in actor name (or vice versa)
-	for _, a := range females {
-		aname := strings.TrimSpace(a.Name)
-		if strings.Contains(aname, keyword) || strings.Contains(keyword, aname) {
-			return a.ID, nil
-		}
-	}
-
-	// Priority 3: first character match (handles simplified/traditional differences)
-	for _, a := range females {
-		aname := strings.TrimSpace(a.Name)
-		if len(aname) > 0 && len(keyword) > 0 {
-			kFirst := string([]rune(keyword)[:1])
-			aFirst := string([]rune(aname)[:1])
-			if kFirst == aFirst {
-				return a.ID, nil
-			}
-		}
-	}
-
-	// Fallback: return first female actor
-	return females[0].ID, nil
 }
 
 func (c *Client) ActorVideos(ctx context.Context, query ActorVideosQuery) (Page[VideoSummary], error) {

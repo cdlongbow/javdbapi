@@ -99,6 +99,10 @@ func (f *fakeFetcher) Reviews(_ context.Context, id javdbapi.VideoID) ([]javdbap
 	return f.reviewsByID[id], nil
 }
 
+func (f *fakeFetcher) ResolveVideoID(_ context.Context, _ string) (javdbapi.VideoID, error) {
+	return "", fmt.Errorf("unexpected ResolveVideoID call")
+}
+
 func (f *fakeFetcher) detailCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -7,7 +7,6 @@ import (
 
 	cli "github.com/urfave/cli/v3"
 
-	javdbapi "github.com/RPbro/javdbapi"
 	"github.com/RPbro/javdbapi/internal/cliapp"
 	"github.com/RPbro/javdbapi/internal/clioutput"
 )
@@ -22,10 +21,6 @@ func newVideoCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Wr
 		),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			rawID := cmd.String("id")
-			id, err := javdbapi.ResolveVideoID(rawID)
-			if err != nil {
-				return err
-			}
 
 			logger := loggerFromCommand(cmd, stderr)
 			shared, err := sharedOptionsFromCommand(cmd, stdout, logger)
@@ -37,10 +32,14 @@ func newVideoCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Wr
 			if err != nil {
 				return err
 			}
+
+			id, err := fetcher.ResolveVideoID(ctx, rawID)
+			if err != nil {
+				return err
+			}
+
 			store := clioutput.NewStore(shared.OutputDir, time.Now)
 
-			// Use the raw input as the code for naming; falls back to resolved ID
-			// if the raw input wasn't a valid code.
 			req := cliapp.VideoRequest{Shared: shared, ID: id, Code: rawID}
 			summary, err := cliapp.RunVideoCommand(ctx, fetcher, store, req)
 			logSummary(shared.Logger, summary, err)

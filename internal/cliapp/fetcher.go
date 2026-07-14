@@ -16,6 +16,7 @@ type Fetcher interface {
 	Ranking(context.Context, javdbapi.RankingQuery) (javdbapi.Page[javdbapi.VideoSummary], error)
 	Detail(context.Context, javdbapi.VideoID) (*javdbapi.VideoDetail, error)
 	Reviews(context.Context, javdbapi.VideoID) ([]javdbapi.Review, error)
+	ResolveVideoID(context.Context, string) (javdbapi.VideoID, error)
 }
 
 type ClientFetcher struct {
@@ -48,4 +49,8 @@ func (f ClientFetcher) Detail(ctx context.Context, id javdbapi.VideoID) (*javdba
 
 func (f ClientFetcher) Reviews(ctx context.Context, id javdbapi.VideoID) ([]javdbapi.Review, error) {
 	return f.Client.Reviews(ctx, id)
+}
+
+func (f ClientFetcher) ResolveVideoID(ctx context.Context, raw string) (javdbapi.VideoID, error) {
+	return f.Client.ResolveVideoID(ctx, raw)
 }

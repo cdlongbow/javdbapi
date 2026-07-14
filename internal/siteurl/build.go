@@ -110,6 +110,25 @@ func Search(base *url.URL, keyword string, page int, locale string) (*url.URL, e
 	return u, nil
 }
 
+// SearchActors builds a URL for the search page filtered to actors only.
+func SearchActors(base *url.URL, keyword string, page int, locale string) (*url.URL, error) {
+	if strings.TrimSpace(keyword) == "" {
+		return nil, fmt.Errorf("missing search keyword")
+	}
+	u, err := cloneBase(base)
+	if err != nil {
+		return nil, err
+	}
+	appendSegments(u, "search")
+	setQuery(u, url.Values{
+		"q":      {keyword},
+		"f":      {"actor"},
+		"page":   {strconv.Itoa(normalizePage(page))},
+		"locale": {locale},
+	})
+	return u, nil
+}
+
 func Home(base *url.URL, typeSegment, filter, sort string, page int, locale string) (*url.URL, error) {
 	u, err := cloneBase(base)
 	if err != nil {

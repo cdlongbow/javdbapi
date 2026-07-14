@@ -315,3 +315,56 @@ func TestNewClientAcceptsHTTPAndHTTPSBaseURL(t *testing.T) {
 		})
 	}
 }
+
+var extraNames = []string{
+	"桃乃木香奈",
+	"桥本有菜",
+	"高桥圣子",
+	"葵司",
+	"松本一香",
+	"水卜樱",
+	"神宫寺奈绪",
+	"楪可怜",
+	"石川澪",
+	"铃木心春",
+}
+
+func TestActorByName15Actresses(t *testing.T) {
+	if os.Getenv("JAVDB_INTEGRATION") != "1" {
+		t.Skip("set JAVDB_INTEGRATION=1 to run live contract tests")
+	}
+
+	client, err := javdbapi.NewClient(javdbapi.ClientConfig{})
+	require.NoError(t, err)
+
+	names := append([]string{
+		"柊木里音",
+		"藤森里穗",
+		"美乃雀",
+		"筱田优",
+		"小野夕子",
+		"天使萌",
+		"河北彩花",
+		"三上悠亞",
+		"安斋拉拉",
+		"相泽南",
+		"深田咏美",
+		"樱空桃",
+		"明里紬",
+		"希岛爱理",
+		"波多野结衣",
+	}, extraNames...)
+
+	ctx := context.Background()
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			normName := javdbapi.NormalizeName(name)
+			t.Logf("search: %s -> %s", name, normName)
+
+			id, err := client.ActorByName(ctx, name)
+			require.NoError(t, err)
+			assert.NotEmpty(t, string(id))
+			t.Logf("%s -> %s", name, id)
+		})
+	}
+}

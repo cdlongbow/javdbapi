@@ -122,3 +122,9 @@ type Review struct {
 	Likes       int        `json:"likes"`
 	Content     string     `json:"content"`
 }
+
+type ActorSearchItem struct {
+	ID      ActorID `json:"id"`
+	Name    string  `json:"name"`
+	Aliases []string `json:"aliases,omitempty"`
+}

@@ -70,6 +70,14 @@ func (f *fakeFetcher) Reviews(_ context.Context, id javdbapi.VideoID) ([]javdbap
 	return f.reviews, f.reviewErr
 }
 
+func (f *fakeFetcher) ResolveVideoID(_ context.Context, raw string) (javdbapi.VideoID, error) {
+	id, err := javdbapi.ParseVideoID(raw)
+	if err == nil {
+		return id, nil
+	}
+	return "", err
+}
+
 func stubBuilder(fetcher cliapp.Fetcher) fetcherBuilder {
 	return func(*cli.Command, *slog.Logger) (cliapp.Fetcher, error) {
 		return fetcher, nil
