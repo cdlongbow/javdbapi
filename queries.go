@@ -145,6 +145,10 @@ type ActorVideosQuery struct {
 	Page    int
 }
 
+type ActorDetailQuery struct {
+	ActorID ActorID
+}
+
 type RankingPeriod string
 type RankingType string
 

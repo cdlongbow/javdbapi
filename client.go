@@ -108,6 +108,17 @@ func buildHTTPClient(cfg HTTPConfig) (*http.Client, error) {
 	return &http.Client{Timeout: cfg.Timeout, Transport: transport}, nil
 }
 
+// BaseURL returns the client's configured base URL.
+func (c *Client) BaseURL() *url.URL {
+	return c.baseURL
+}
+
+// GetRaw fetches the raw HTML body for the given URL. Useful for parsing
+// pages not covered by the typed API (e.g. actor detail pages).
+func (c *Client) GetRaw(ctx context.Context, u *url.URL) ([]byte, error) {
+	return c.fetcher.Get(ctx, u)
+}
+
 // VideoURL returns a human-shareable link for id. id is expected to come
 // from ParseVideoID or a prior VideoSummary.ID, so URL construction cannot
 // fail in practice; on the defensive error path (a hand-built invalid ID)

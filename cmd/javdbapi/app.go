@@ -65,6 +65,7 @@ func newCommand(buildFetcher fetcherBuilder, stdout io.Writer, stderr io.Writer)
 			newHomeCommand(buildFetcher, stdout, stderr),
 			newMakerCommand(buildFetcher, stdout, stderr),
 			newActorCommand(buildFetcher, stdout, stderr),
+			newActorDetailCommand(buildFetcher, stdout, stderr),
 			newRankingCommand(buildFetcher, stdout, stderr),
 			newVideoCommand(buildFetcher, stdout, stderr),
 		},

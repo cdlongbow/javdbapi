@@ -191,6 +191,21 @@ func Ranking(base *url.URL, period, rankingType string, page int, locale string)
 	return u, nil
 }
 
+func ActorDetail(base *url.URL, actorID string, locale string) (*url.URL, error) {
+	if err := validateSegment("actor id", actorID); err != nil {
+		return nil, err
+	}
+	u, err := cloneBase(base)
+	if err != nil {
+		return nil, err
+	}
+	appendSegments(u, "actors", actorID)
+	setQuery(u, url.Values{
+		"locale": {locale},
+	})
+	return u, nil
+}
+
 // SameHostRedirect mirrors http.Client.CheckRedirect's (req, via) shape but
 // takes the upcoming request's URL directly so it can be unit tested without
 // constructing a full *http.Request for the redirect target.

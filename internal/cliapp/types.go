@@ -14,8 +14,9 @@ const (
 	CommandHome    CommandName = "home"
 	CommandSearch  CommandName = "search"
 	CommandMaker   CommandName = "maker"
-	CommandActor   CommandName = "actor"
-	CommandRanking CommandName = "ranking"
+	CommandActor     CommandName = "actor"
+	CommandActorDetail CommandName = "actor-detail"
+	CommandRanking   CommandName = "ranking"
 )
 
 type OutputMode string
@@ -50,6 +51,7 @@ type ListRequest struct {
 	Search   *javdbapi.SearchQuery
 	Maker    *javdbapi.MakerVideosQuery
 	Actor    *javdbapi.ActorVideosQuery
+	ActorDetail *javdbapi.ActorDetailQuery
 	Ranking  *javdbapi.RankingQuery
 }
 
