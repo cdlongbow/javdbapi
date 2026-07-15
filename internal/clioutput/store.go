@@ -218,14 +218,15 @@ func (s *Store) WriteNFO(path string, doc Document) error {
 
 	sb.WriteString("<musicvideo>\n")
 
-	code := d.Summary.Code
 	title := d.Summary.Title
-	cleanName := code
-	if cleanName == "" {
-		cleanName = title
+
+	sb.WriteString(fmt.Sprintf("  <title>%s</title>\n", escapeNFO(title)))
+
+	if d.Series != nil && d.Series.Name != "" {
+		sb.WriteString("  <set>\n")
+		sb.WriteString(fmt.Sprintf("    <name>%s</name>\n", escapeNFO(d.Series.Name)))
+		sb.WriteString("  </set>\n")
 	}
-	sb.WriteString(fmt.Sprintf("  <title>%s</title>\n", escapeNFO(cleanName)))
-	sb.WriteString(fmt.Sprintf("  <plot>%s</plot>\n", escapeNFO(title)))
 
 	if !d.Summary.PublishedAt.IsZero() {
 		sb.WriteString(fmt.Sprintf("  <year>%s</year>\n", d.Summary.PublishedAt.Format("2006-01-02")))
@@ -241,6 +242,14 @@ func (s *Store) WriteNFO(path string, doc Document) error {
 
 	if d.Summary.Score.Count > 0 {
 		sb.WriteString(fmt.Sprintf("  <votes>%d</votes>\n", d.Summary.Score.Count))
+	}
+
+	if d.WantCount != nil && *d.WantCount > 0 {
+		sb.WriteString(fmt.Sprintf("  <wish>%d</wish>\n", *d.WantCount))
+	}
+
+	if d.WatchedCount != nil && *d.WatchedCount > 0 {
+		sb.WriteString(fmt.Sprintf("  <watched>%d</watched>\n", *d.WatchedCount))
 	}
 
 	for _, tag := range d.Tags {
@@ -266,8 +275,18 @@ func (s *Store) WriteNFO(path string, doc Document) error {
 		sb.WriteString(fmt.Sprintf("  <thumb>%s</thumb>\n", d.Summary.CoverURL))
 	}
 
-	for _, m := range d.Magnets {
-		sb.WriteString(fmt.Sprintf("  <source>%s</source>\n", escapeNFO(m.URI)))
+	if len(d.Screenshots) > 0 {
+		sb.WriteString("  <fanart>\n")
+		for _, s := range d.Screenshots {
+			url := s.FullURL
+			if url == "" {
+				url = s.ThumbnailURL
+			}
+			if url != "" {
+				sb.WriteString(fmt.Sprintf("    <thumb>%s</thumb>\n", escapeNFO(url)))
+			}
+		}
+		sb.WriteString("  </fanart>\n")
 	}
 
 	sb.WriteString("</musicvideo>")

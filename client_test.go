@@ -334,7 +334,11 @@ func TestActorByName15Actresses(t *testing.T) {
 		t.Skip("set JAVDB_INTEGRATION=1 to run live contract tests")
 	}
 
-	client, err := javdbapi.NewClient(javdbapi.ClientConfig{})
+	baseURL := os.Getenv("JAVDB_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://javdb573.com"
+	}
+	client, err := javdbapi.NewClient(javdbapi.ClientConfig{BaseURL: baseURL})
 	require.NoError(t, err)
 
 	names := append([]string{
