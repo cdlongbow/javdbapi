@@ -236,11 +236,11 @@ func (s *Store) WriteNFO(path string, doc Document) error {
 		sb.WriteString(fmt.Sprintf("  <runtime>%d</runtime>\n", *d.DurationMinutes))
 	}
 
-	if d.Summary.Score.Value > 0 {
+	if d.Summary.Score != nil && d.Summary.Score.Value > 0 {
 		sb.WriteString(fmt.Sprintf("  <rating>%.1f</rating>\n", d.Summary.Score.Value))
 	}
 
-	if d.Summary.Score.Count > 0 {
+	if d.Summary.Score != nil && d.Summary.Score.Count > 0 {
 		sb.WriteString(fmt.Sprintf("  <votes>%d</votes>\n", d.Summary.Score.Count))
 	}
 

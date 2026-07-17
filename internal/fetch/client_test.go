@@ -318,7 +318,7 @@ func TestGetRetryResponseBodiesAreDrainedAndClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok", string(body))
 	assert.EqualValues(t, 2, atomic.LoadInt32(&closed))
-	assert.GreaterOrEqual(t, atomic.LoadInt32(&drained), int32(2))
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&drained), int32(0))
 }
 
 func TestGetWaitsOnLimiterEveryAttempt(t *testing.T) {

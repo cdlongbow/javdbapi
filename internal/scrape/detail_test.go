@@ -77,10 +77,18 @@ func TestParseDetailAllowsMissingOptionalSections(t *testing.T) {
 	assert.Nil(t, got.Value.WatchedCount)
 }
 
-func TestParseDetailRejectsMissingScore(t *testing.T) {
-	_, err := ParseDetail(loadFixture(t, "detail-invalid.html"), "BAD000")
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrParse))
+func TestParseDetailWarnsOnMissingScore(t *testing.T) {
+	got, err := ParseDetail(loadFixture(t, "detail-invalid.html"), "BAD000")
+	require.NoError(t, err)
+	assert.Nil(t, got.Value.Summary.Score)
+	var found bool
+	for _, w := range got.Warnings {
+		if w.Field == "score" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected a score warning")
 }
 
 func TestParseDetailRejectsEmptyID(t *testing.T) {

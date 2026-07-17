@@ -1,14 +1,17 @@
 package scrape
 
 const (
-	selectorListItem    = "div.item"
-	selectorNextPage    = "a.pagination-next[rel=next]"
-	selectorDetailPanel = ".movie-panel-info .panel-block"
-	selectorReviewItem  = ".review-item[id^='review-item-']"
-	selectorEmptyState  = ".empty-message"
-	selectorMagnetItem  = "#magnets-content > .item.columns.is-desktop"
-	selectorPlayButton  = ".video-detail .play-button"
+	selectorListItem           = "div.item"
+	selectorNextPage           = "a.pagination-next[rel=next]"
+	selectorDetailPanel        = ".movie-panel-info .panel-block"
+	selectorReviewItem         = ".review-item[id^='review-item-']"
+	selectorEmptyState         = ".empty-message"
+	selectorReviewsMessageBody = "article.message.video-panel > .message-body"
+	selectorMagnetItem         = "#magnets-content > .item.columns.is-desktop"
+	selectorPlayButton         = ".video-detail .play-button"
 )
+
+const reviewsEmptyMessageText = "暫無內容"
 
 const (
 	labelCode     = "番號:"

@@ -37,17 +37,17 @@ func TestVideoRejectsHostileID(t *testing.T) {
 }
 
 func TestSameHostRedirectRejectsForeignHost(t *testing.T) {
-	err := siteurl.SameHostRedirect(mustURL(t, "https://evil.example/v/x"), []*http.Request{{URL: mustURL(t, "https://javdb.com/v/x")}})
+	err := siteurl.SameOriginRedirect(mustURL(t, "https://evil.example/v/x"), []*http.Request{{URL: mustURL(t, "https://javdb.com/v/x")}})
 	require.Error(t, err)
 }
 
 func TestSameHostRedirectAllowsSameHost(t *testing.T) {
-	err := siteurl.SameHostRedirect(mustURL(t, "https://javdb.com/v/y"), []*http.Request{{URL: mustURL(t, "https://javdb.com/v/x")}})
+	err := siteurl.SameOriginRedirect(mustURL(t, "https://javdb.com/v/y"), []*http.Request{{URL: mustURL(t, "https://javdb.com/v/x")}})
 	require.NoError(t, err)
 }
 
 func TestSameHostRedirectAllowsFirstRequest(t *testing.T) {
-	err := siteurl.SameHostRedirect(mustURL(t, "https://javdb.com/v/x"), nil)
+	err := siteurl.SameOriginRedirect(mustURL(t, "https://javdb.com/v/x"), nil)
 	require.NoError(t, err)
 }
 

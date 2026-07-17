@@ -94,6 +94,7 @@ func newListCommand(
 			if err != nil {
 				return err
 			}
+			req.SummaryOnly = cmd.Bool("summary-only")
 			logger := loggerFromCommand(cmd, stderr)
 			shared, err := sharedOptionsFromCommand(cmd, stdout, logger)
 			if err != nil {
@@ -185,6 +186,7 @@ func logSummary(logger *slog.Logger, s cliapp.Summary, err error) {
 		"skipped_fresh", s.SkippedFresh,
 		"failed", s.Failed,
 		"partial_failed", s.PartialFailed,
+		"summaries_output", s.SummariesOutput,
 	}
 	if err != nil {
 		logger.Warn("finished with errors", fields...)

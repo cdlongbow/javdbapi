@@ -25,19 +25,19 @@ func ParseList(doc *goquery.Document, page int) (Result[ListPage], error) {
 		return result, fmt.Errorf("%w: list page has no recognizable items", ErrParse)
 	}
 
-	var parseErr error
-	items.EachWithBreak(func(_ int, item *goquery.Selection) bool {
+	items.Each(func(i int, item *goquery.Selection) {
 		summary, warnings, err := parseListItem(item)
 		if err != nil {
-			parseErr = err
-			return false
+			result.Warnings = append(result.Warnings, Warning{Field: fmt.Sprintf("items[%d]", i), Message: err.Error()})
+			return
 		}
 		result.Value.Items = append(result.Value.Items, summary)
-		result.Warnings = append(result.Warnings, warnings...)
-		return true
+		for _, w := range warnings {
+			result.Warnings = append(result.Warnings, Warning{Field: fmt.Sprintf("items[%d].%s", i, w.Field), Message: w.Message})
+		}
 	})
-	if parseErr != nil {
-		return result, parseErr
+	if len(result.Value.Items) == 0 {
+		return result, fmt.Errorf("%w: list page has no valid items", ErrParse)
 	}
 
 	result.Value.HasNext = doc.Find(selectorNextPage).Length() > 0
@@ -65,25 +65,22 @@ func parseListItem(item *goquery.Selection) (Summary, []Warning, error) {
 	}
 
 	dateText := strings.TrimSpace(item.Find(".meta").Text())
-	var publishedAt time.Time
-	if dateText == "" || dateText == "N/A" {
-		warnings = append(warnings, Warning{Field: "published_at", Message: fmt.Sprintf("invalid date %q", dateText)})
-	} else {
-		parsed, err := time.Parse(listDateLayout, dateText)
-		if err != nil {
-			warnings = append(warnings, Warning{Field: "published_at", Message: fmt.Sprintf("invalid date %q", dateText)})
-		} else {
-			publishedAt = parsed
-		}
+	if dateText == "" {
+		return Summary{}, nil, fmt.Errorf("%w: list item missing date", ErrParse)
+	}
+	publishedAt, err := time.Parse(listDateLayout, dateText)
+	if err != nil {
+		return Summary{}, nil, fmt.Errorf("%w: invalid list item date %q: %w", ErrParse, dateText, err)
 	}
 
 	scoreText := strings.TrimSpace(item.Find(".score").Text())
-	if scoreText == "" {
-		return Summary{}, nil, fmt.Errorf("%w: list item missing score", ErrParse)
-	}
-	score, err := parseScore(scoreText)
-	if err != nil {
-		return Summary{}, nil, err
+	var score *Score
+	if scoreText != "" {
+		if s, err := parseScore(scoreText); err != nil {
+			warnings = append(warnings, Warning{Field: "score", Message: err.Error()})
+		} else {
+			score = &s
+		}
 	}
 
 	coverURL, _ := item.Find(".cover img").Attr("src")

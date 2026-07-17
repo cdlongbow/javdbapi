@@ -37,8 +37,14 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 
 	baseURL, err := url.Parse(cfg.BaseURL)
-	if err != nil || baseURL.Host == "" {
-		return nil, fmt.Errorf("%w: invalid base url %q", ErrInvalidConfig, cfg.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid base url", ErrInvalidConfig)
+	}
+	if baseURL.Host == "" {
+		return nil, fmt.Errorf("%w: invalid base url: missing host", ErrInvalidConfig)
+	}
+	if baseURL.User != nil {
+		return nil, fmt.Errorf("%w: base url must not contain user info", ErrInvalidConfig)
 	}
 	if baseURL.Scheme != "http" && baseURL.Scheme != "https" {
 		return nil, fmt.Errorf("%w: unsupported base url scheme %q", ErrInvalidConfig, baseURL.Scheme)
@@ -53,7 +59,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		HTTPClient:        httpClient,
 		UserAgent:         cfg.UserAgent,
 		MaxResponseBytes:  cfg.HTTP.MaxResponseBytes,
-		CheckRedirect:     func(req *http.Request, via []*http.Request) error { return siteurl.SameHostRedirect(req.URL, via) },
+		CheckRedirect:     checkSiteRedirect,
 		RateLimitDisabled: cfg.RateLimit.Disabled,
 		RateLimit:         cfg.RateLimit.RequestsPerSecond,
 		RateBurst:         cfg.RateLimit.Burst,
@@ -90,22 +96,35 @@ func buildHTTPClient(cfg HTTPConfig) (*http.Client, error) {
 	if proxyURL := strings.TrimSpace(cfg.ProxyURL); proxyURL != "" {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil {
-			return nil, fmt.Errorf("%w: parse proxy url: %v", ErrInvalidConfig, err)
+			return nil, fmt.Errorf("%w: invalid proxy url", ErrInvalidConfig)
 		}
 		scheme := strings.ToLower(parsed.Scheme)
 		switch scheme {
 		case "http", "https", "socks5", "socks5h":
 		default:
-			return nil, fmt.Errorf("%w: unsupported proxy scheme %q", ErrInvalidConfig, parsed.Scheme)
+			return nil, fmt.Errorf("%w: unsupported proxy scheme %q", ErrInvalidConfig, scheme)
 		}
 		parsed.Scheme = scheme
 		if parsed.Host == "" {
-			return nil, fmt.Errorf("%w: invalid proxy url %q", ErrInvalidConfig, proxyURL)
+			return nil, fmt.Errorf("%w: invalid proxy url: missing host", ErrInvalidConfig)
 		}
 		transport.Proxy = http.ProxyURL(parsed)
 	}
 
 	return &http.Client{Timeout: cfg.Timeout, Transport: transport}, nil
+}
+
+func sanitizedURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	clone := *u
+	clone.User = nil
+	clone.RawQuery = ""
+	clone.ForceQuery = false
+	clone.Fragment = ""
+	clone.RawFragment = ""
+	return clone.String()
 }
 
 // BaseURL returns the client's configured base URL.
@@ -114,7 +133,7 @@ func (c *Client) BaseURL() *url.URL {
 }
 
 // GetRaw fetches the raw HTML body for the given URL. Useful for parsing
-// pages not covered by the typed API (e.g. actor detail pages).
+// pages not covered by the typed API.
 func (c *Client) GetRaw(ctx context.Context, u *url.URL) ([]byte, error) {
 	return c.fetcher.Get(ctx, u)
 }
@@ -131,24 +150,18 @@ func (c *Client) VideoURL(id VideoID) string {
 	return target.String()
 }
 
-// sanitizedURL strips query values (which may contain the caller's search
-// keyword or other sensitive filters) before a URL is surfaced in an error
-// or log line.
-func sanitizedURL(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-	clone := *u
-	clone.RawQuery = ""
-	return clone.String()
-}
-
 func mapFetchErr(op string, target *url.URL, err error) error {
 	var statusErr *fetch.StatusError
-	if errors.As(err, &statusErr) {
+	switch {
+	case errors.Is(err, fetch.ErrChallenge):
+		return &OpError{Op: op, URL: sanitizedURL(target), Err: ErrChallenge}
+	case errors.Is(err, ErrAuthenticationRequired):
+		return &OpError{Op: op, URL: sanitizedURL(target), Err: ErrAuthenticationRequired}
+	case errors.As(err, &statusErr):
 		return &OpError{Op: op, URL: sanitizedURL(target), Err: &HTTPError{StatusCode: statusErr.StatusCode, URL: sanitizedURL(target)}}
+	default:
+		return &OpError{Op: op, URL: sanitizedURL(target), Err: err}
 	}
-	return &OpError{Op: op, URL: sanitizedURL(target), Err: err}
 }
 
 func mapScrapeErr(op string, target *url.URL, err error) error {
@@ -162,6 +175,16 @@ func mapScrapeErr(op string, target *url.URL, err error) error {
 	}
 }
 
+func checkSiteRedirect(req *http.Request, via []*http.Request) error {
+	if err := siteurl.SameOriginRedirect(req.URL, via); err != nil {
+		return err
+	}
+	if req.URL != nil && req.URL.Path == "/login" {
+		return ErrAuthenticationRequired
+	}
+	return nil
+}
+
 func (c *Client) logWarnings(op string, warnings []scrape.Warning) {
 	if c.logger == nil {
 		return
@@ -171,6 +194,13 @@ func (c *Client) logWarnings(op string, warnings []scrape.Warning) {
 	}
 }
 
+func toPublicScore(s *scrape.Score) *Score {
+	if s == nil {
+		return nil
+	}
+	return &Score{Value: s.Value, Count: s.Count}
+}
+
 func toPublicSummary(s scrape.Summary) VideoSummary {
 	return VideoSummary{
 		ID:          VideoID(s.ID),
@@ -178,7 +208,7 @@ func toPublicSummary(s scrape.Summary) VideoSummary {
 		Title:       s.Title,
 		CoverURL:    s.CoverURL,
 		PublishedAt: s.PublishedAt,
-		Score:       Score{Value: s.Score.Value, Count: s.Score.Count},
+		Score:       toPublicScore(s.Score),
 		Availability: Availability{
 			HasMagnet:         s.Availability.HasMagnet,
 			HasSubtitleMagnet: s.Availability.HasSubtitleMagnet,
